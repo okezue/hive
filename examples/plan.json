@@ -1,0 +1,8 @@
+{
+  "tasks": [
+    {"key": "schema", "title": "Design the storage schema", "role": "researcher"},
+    {"key": "api", "title": "Implement the API", "role": "implementer", "after": ["schema"], "verify": true, "paths": ["src/api/*"]},
+    {"key": "ui", "title": "Build the UI", "role": "implementer", "after": ["schema"], "paths": ["src/ui/*"]},
+    {"key": "docs", "title": "Write the docs", "after": ["api", "ui"]}
+  ]
+}

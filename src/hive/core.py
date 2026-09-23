@@ -16,6 +16,7 @@ from .sess import Sess
 from .summ import Summ, backend
 from .tasks import Tasks
 from .tools import Tools
+from .know import Know
 from .tree import Tree
 
 
@@ -34,6 +35,8 @@ class Hive:
         s.aware = Aware(s.db, s.log, s.agents, s.tasks, s.files, s.summ, cfg.stale)
         s.notice = Notice(s.mail, s.log, s.agents, s.roles, s.files.mrs, cfg.reminder)
         s.tree = Tree(s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, cfg)
+        s.know = Know(s)
+        s.tree.tips = s.know.tips
 
     @classmethod
     def open(cls, db=None, root=None, session=None, summ=None): return cls(load(db, root, session), summ)
@@ -48,4 +51,6 @@ class Hive:
         except Missing: a = None
         return Sess(s, a.id) if a and a.state != 'left' else s.join(name, 'coordinator', about='the human at the CLI')
 
-    def close(s): s.db.close()
+    def close(s):
+        s.db.close()
+        for x in (*s.know.libs.values(), *s.know.ro.values()): x.db.close()

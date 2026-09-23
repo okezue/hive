@@ -36,7 +36,7 @@ An agent can also start unnamed and call `join`. Subagents that share one host c
 
 ## How agents work together
 
-**Roles.** Every agent has a role: `coordinator`, `implementer`, `verifier`, `reviewer`, `researcher`, `observer`, or one a coordinator defines. A role is a charter plus capabilities, and every operation checks one. When an agent reaches outside its role the refusal restates its charter and points it at the agent whose job it is, and the charter is repeated to each agent every twenty calls. Verifiers cannot edit files or verify their own work, and tasks can only be taken by the role they name.
+**Roles.** Every agent has a role: `coordinator`, `implementer`, `verifier`, `reviewer`, `researcher`, `composer`, `distiller`, `observer`, or one a coordinator defines. A role is a charter plus capabilities, and every operation checks one. When an agent reaches outside its role the refusal restates its charter and points it at the agent whose job it is, and the charter is repeated to each agent every twenty calls. Verifiers cannot edit files or verify their own work, and tasks can only be taken by the role they name.
 
 **Messages.** `send` reaches an agent, a role (`role:verifier`), a workflow, an agent's parent or children, or everyone, in one of three modes:
 
@@ -60,6 +60,8 @@ Lineage is permanent: `path` shows the chain from the root with every ancestor's
 
 The tree is meant to be walked, one neighborhood at a time. `tree` renders a node and a few levels below it with `+N more` for wide levels, `node` shows one agent's goal, task, budget, children, an exact rollup of its whole subtree (agents and tasks by state, open issues, merge requests, unacknowledged interrupts, stale agents), and which descendant needs attention first. `walk` moves a personal cursor (`up`, `down`, `down:<name>`, `next`, `prev`, `root`) without changing who the agent acts as, `find` searches a subtree, and `brief` summarizes a subtree along its own shape: exact blockers first, then each child's work condensed recursively within the token budget. Context follows lineage too: `put(key, value, scope='node')` is visible to the whole subtree below the writer, `scope='team'` writes to the parent's frame for siblings to share, and reads look up the nearest frame on the way to the root before falling back to the workflow and the session. The design draws on ADK agent hierarchies, OpenAI's agents-as-tools, Claude Code's nested subagents, LangGraph subgraphs, and a design review by GPT 6 Astra; lineage-scoped memory, escrowed budgets, narrowing capabilities, custody transfer, and structured completion are what set it apart.
 
+**Insights.** Individual agents record findings as they work with `note` (facts, decisions, problems, methods, each with references to evidence, and `against:f12` to mark a contradiction); finished tasks and verification verdicts become findings automatically. Two dedicated roles turn them into knowledge. A `composer` combines what a subtree found, top down: `stale` lists the nodes whose compositions are missing or out of date, deepest first, so the composer handles big branches by spawning sub-composers and gathering them; `material` gives one node's own findings, each child's composition (or its raw findings if nobody has composed it), and the flagged contradictions; `compose` records the account with its sources, refusing findings from outside the subtree. A composition covers exactly what it cites (directly, or through the child compositions it cites), so a node stays stale until every finding below it is covered, and `gist` shows a node's current composition and what it does not yet cover. A `distiller` turns the combined knowledge of many agents into insights: `harvest` lays out each independent branch next to the saved insights that look related, and `distill` saves an insight as `observed` (a pattern in the work) or `reusable` (a lesson for future work) with its evidence. A near-duplicate is shown instead of being saved twice, so evidence accumulates on one insight. Confidence counts independent branches of the tree: findings from the same line of delegation count once; a root's own results, whole-tree compositions, and anything composers or distillers write add no independent support; `weigh` adds evidence for or against, where support must cite findings but a note is enough to contest; and insights move between proposed, established, and contested as evidence arrives. Insights live in a library outside the session (`.hive/insights.db` for the project, or `~/.hive/insights.db` with `scope='global'`), so later sessions can `recall` them, and the most relevant established ones are written into the prompts of newly spawned and dispatched agents. When a task with several finished subtasks completes, or all of an agent's delegated children settle, Hive files a compose task for that part of the tree (work done by composers and distillers never triggers more), and composing a root with two or more branches files a distill task, whenever an agent or runner command exists for those roles.
+
 **Shared context and tools.** `put` and `get` maintain a versioned board of findings, plans, and decisions, scoped to the session or a workflow, with compare-and-swap for co-edited entries. `offer` shares a tool: calls to an agent tool arrive in the owner's inbox and it replies with `answer`, which lets one agent expose something only it has; a command tool runs a fixed program with the arguments as JSON.
 
 **Scope.** One hive database is one session. Workflows group agents and tasks inside it, and broadcasts, context, task lists, and overviews can be limited to a workflow.
@@ -74,6 +76,7 @@ The tree is meant to be walked, one neighborhood at a time. `tree` renders a nod
 | files | `read` `edit` `write` `sync` `diff` `release` `claim` `files` `merges` `propose` `respond` `abandon` |
 | tasks | `plan` `tasks` `task` `take` `done` `fail` `verify` `cancel` `dispatch` `define` `assign` |
 | tree | `spawn` `gather` `tree` `node` `walk` `path` `find` `brief` `fund` `adopt` `escalate` `decide` `issues` |
+| know | `note` `findings` `material` `compose` `gist` `stale` `harvest` `distill` `recall` `weigh` `retire` |
 | tools | `offer` `tools` `call` `answer` `result` `withdraw` |
 
 `hive mcp --tools core,msgs,files` exposes a subset.
@@ -95,11 +98,11 @@ dev.done(t, 'added /health; tests pass')
 
 ## CLI
 
-`hive status`, `hive tree [agent] --depth 3`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run`, and `hive hook <event>` for harnesses. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
+`hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run`, and `hive hook <event>` for harnesses. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
 
 ## Configuration
 
-`.hive/config.toml` holds the reminder interval, task retry limit, staleness threshold, tree limits (depth, fanout, root budget), summarizer settings, and the runner's agent commands. `HIVE_DB`, `HIVE_ROOT`, and `HIVE_SESSION` choose the hive; `HIVE_KEY` is the admin key for privileged roles over HTTP; `HIVE_AGENT` with `HIVE_ROLE`, or `HIVE_AGENT_TOKEN`, preset an agent's identity; `HIVE_LLM_API_KEY` (or `XAI_API_KEY`), `HIVE_LLM_BASE_URL`, `HIVE_LLM_MODEL`, and `HIVE_SUMMARIZER` control summaries.
+`.hive/config.toml` holds the reminder interval, task retry limit, staleness threshold, tree limits (depth, fanout, root budget), insight automation and the global library path, summarizer settings, and the runner's agent commands. `HIVE_DB`, `HIVE_ROOT`, and `HIVE_SESSION` choose the hive; `HIVE_KEY` is the admin key for privileged roles over HTTP; `HIVE_AGENT` with `HIVE_ROLE`, or `HIVE_AGENT_TOKEN`, preset an agent's identity; `HIVE_LLM_API_KEY` (or `XAI_API_KEY`), `HIVE_LLM_BASE_URL`, `HIVE_LLM_MODEL`, and `HIVE_SUMMARIZER` control summaries.
 
 ## Development
 
@@ -108,7 +111,7 @@ uv venv && uv pip install -e '.[dev]'
 .venv/bin/pytest -q
 ```
 
-The suite covers recursive spawning three levels deep through the runner, the merge algorithm (including agreement with `git merge-file`), co-editing and merge requests, task graphs and verification, messaging, summaries, the MCP server in process and over stdio, hooks, the runner, and several processes editing one file and racing for tasks.
+The suite covers composition and insight distillation, recursive spawning three levels deep through the runner, the merge algorithm (including agreement with `git merge-file`), co-editing and merge requests, task graphs and verification, messaging, summaries, the MCP server in process and over stdio, hooks, the runner, and several processes editing one file and racing for tasks.
 
 ## License
 

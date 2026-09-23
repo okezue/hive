@@ -10,6 +10,10 @@ def root(tmp_path):
     return d
 
 
+@pytest.fixture(autouse=True)
+def lib(monkeypatch, tmp_path): monkeypatch.setenv('HIVE_GLOBAL', str(tmp_path/'global'/'insights.db'))
+
+
 @pytest.fixture
 def hive(root, monkeypatch):
     for k in ('XAI_API_KEY', 'HIVE_LLM_API_KEY', 'HIVE_AGENT', 'HIVE_AGENT_TOKEN', 'HIVE_DB', 'HIVE_ROOT'): monkeypatch.delenv(k, raising=False)

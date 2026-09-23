@@ -6,6 +6,7 @@ PROTOCOL = '''How to work in the hive (MCP server "hive"):
 - Talk with `send` (mode queue, steer, or interrupt when it cannot wait), `ask` (waits for the answer), `share` (a file range, context entry, task, or message), and `handoff` (pass on your context).
 - Stay aware with `overview`, `digest`, and `watch` (view live, window, or summary). The agents form a tree: `tree`, `node`, `walk`, `path`, `find`, and `brief` navigate it one neighborhood at a time.
 - When part of your work splits off cleanly, `spawn` a helper with a goal and a deliverable, then `gather` its result. Escalate decisions you cannot make with `escalate`.
+- Record what you learn as you go with `note` (facts, decisions, problems, methods; `against:f12` in refs marks a contradiction). Composers combine findings up the tree and distillers keep the insights; `recall` searches insights saved from earlier work.
 - Post `progress` at milestones and publish findings with `put`.
 - Stay within your role and your task's paths; ask the agent whose job it is when something is outside them.'''
 
@@ -16,12 +17,16 @@ def brief(n, role, charter, tok=None):
     return '\n\n'.join(parts+[PROTOCOL])
 
 
-def task(b, t, deps=None):
+def tipText(tips): return 'Insights saved from earlier work that may apply (weigh them if they help or mislead):\n' + '\n'.join(f'- {x}' for x in tips)
+
+
+def task(b, t, deps=None, tips=None):
     parts = [b, f"Your task: {t['id']} {t['title']}"] + ([t['about']] if t.get('about') else [])
     if t.get('paths'): parts.append('Work only in: ' + ', '.join(t['paths']))
     if deps:
         parts.append('Results of the tasks this one depends on:\n' + '\n'.join(
             f"- {d['id']} {d['title']} ({d['state']}, by {d.get('by')}):\n{d.get('result') or d.get('summary') or ''}" for d in deps))
+    parts += [tipText(tips)] if tips else []
     parts.append(f"Start with take('{t['id']}'). Check the work independently, then call verify('{t.get('checks')}', ok=true|false, notes=...) "
                  'with concrete evidence.' if t.get('kind') == 'verify' else
                  f"Start with take('{t['id']}'). When finished call done('{t['id']}', result=...) saying what changed, where, and how you "
@@ -29,12 +34,13 @@ def task(b, t, deps=None):
     return '\n\n'.join(parts)
 
 
-def lineage(b, chain, t, budget, room, grants=None):
+def lineage(b, chain, t, budget, room, grants=None, tips=None):
     why = '\n'.join(f"{'  '*i}{x.name} ({x.role})" + (f': {x.goal}' if x.goal else '') for i, x in enumerate(chain))
     parts = [b, f'Why you exist (root first):\n{why}', f'Your delegation, t{t.id}:\n{t.about}']
     parts += [f'Deliver: {t.deliver}'] if t.deliver else []
     parts += ['Work only in: ' + ', '.join(t.paths)] if t.paths else []
     parts += ['Your capabilities are narrowed to: ' + ', '.join(grants)] if grants else []
+    parts += [tipText(tips)] if tips else []
     parts.append(f"You may spawn helpers below you (budget {budget}, {room} more level(s)); gather collects their results, and you cannot finish "
                  f"t{t.id} while they are unsettled. If you are blocked, escalate to your keeper instead of guessing.")
     parts.append(f"Start with take('t{t.id}'). Finish with done('t{t.id}', result=...) covering what the delivery asks for; if you cannot, "

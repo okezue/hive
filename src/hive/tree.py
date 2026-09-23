@@ -21,7 +21,7 @@ ROLLUP = SUB + """SELECT
 
 class Tree:
     def __init__(s, db, log, mail, agents, roles, tasks, summ, cfg):
-        s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, s.cfg = db, log, mail, agents, roles, tasks, summ, cfg
+        s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, s.cfg, s.tips = db, log, mail, agents, roles, tasks, summ, cfg, None
         agents.left.append(s.gone)
 
     def at(s, me, of):
@@ -79,7 +79,7 @@ class Tree:
         t = s.tasks.get(kid.deleg)
         chain = [s.agents.get(i) for i in reversed(s.agents.above(kid.id))]
         return lineageText(briefText(kid.name, kid.role, s.roles.get(kid.role).charter, kid.token), chain, t, kid.budget, s.cfg.depth-kid.depth,
-                       sorted(J(kid.grants)) if kid.grants else None)
+                           sorted(J(kid.grants)) if kid.grants else None, s.tips(f'{kid.goal} {t.about}') if s.tips else None)
 
     def gather(s, me, of=None, secs=60, any=False, budget=2000):
         if of: ts = [s.tasks.get(s.pick(x)) for x in ([of] if isinstance(of, str) else of)]

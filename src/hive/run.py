@@ -64,7 +64,7 @@ class Runner:
             except Err as e: s.say(f'could not start t{t.id}: {e}')
 
     def launch(s, t):
-        d = s.op.dispatch(t.id)
+        d = s.op.dispatch(t.id, budget=min(4, s.op.agent.budget) if t.kind == 'compose' else 0)
         s.start(s.hive.agents.named(d['agent']), t, d['prompt'], d['role'], s.cmd(t))
 
     def start(s, a, t, prompt, role, cmd):

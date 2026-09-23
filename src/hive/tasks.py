@@ -11,7 +11,7 @@ DOWN = "WITH RECURSIVE down(id) AS (SELECT task FROM deps WHERE dep=? UNION SELE
 
 class Tasks:
     def __init__(s, db, log, mail, agents, roles, summ, tries=2):
-        s.db, s.log, s.mail, s.agents, s.roles, s.summ, s.tries = db, log, mail, agents, roles, summ, tries
+        s.db, s.log, s.mail, s.agents, s.roles, s.summ, s.tries, s.hooks = db, log, mail, agents, roles, summ, tries, []
 
     def _d(s, t):
         if t: t.paths, t.notes = J(t.paths, []), J(t.notes, [])
@@ -199,6 +199,7 @@ class Tasks:
                 c.execute("UPDATE tasks SET state='done',owner=?,result=?,doneAt=?,startAt=COALESCE(startAt,?) WHERE id=?",
                           (a.id, f'{verdict}: {notes}', now(), now(), v.id))
                 s.unset(c, a.id, v.id)
+                for f in s.hooks: f(c, a, s.get(v.id, c), 'done', f'{verdict}: {notes}')
             c.execute('UPDATE tasks SET notes=? WHERE id=?', (dumps([*o.notes, {'by': a.name, 'verdict': verdict, 'notes': notes}]), o.id))
             s.log.add(c, a.id, 'task.verified' if ok else 'task.rejected', f't{o.id} {verdict}: {line(notes, 100)}', f'task:t{o.id}', wf=o.wf)
             if ok:
@@ -269,9 +270,16 @@ class Tasks:
             c.execute('UPDATE agents SET budget=budget+? WHERE id=?', (o.budget, h.id))
             c.execute('UPDATE agents SET budget=0 WHERE id=?', (o.id,))
 
+    def file(s, c, a, title, about, role, kind, node=None):
+        i = c.execute("INSERT INTO tasks(wf,title,about,role,kind,state,creator,node,ts) VALUES(?,?,?,?,?,'ready',?,?,?)",
+                      (a and a.wf, title, about, role, kind, a and a.id, node, now())).lastrowid
+        s.log.add(c, a and a.id, 'task.created', f't{i} [{role}] {line(title, 80)} (ready)', f'task:t{i}', wf=a and a.wf)
+        return i
+
     def finish(s, c, a, t, state, result, log=True):
         c.execute('UPDATE tasks SET state=?,result=?,doneAt=? WHERE id=?', (state, result, now(), t.id))
         s.settle(c, t.id)
+        for f in s.hooks: f(c, a, t, state, result)
         if log: s.log.add(c, a and a.id, 'task.' + ('completed' if state == 'done' else state), f't{t.id} {state}: {line(result, 120)}',
                           f'task:t{t.id}', wf=t.wf)
         if (to := t.creator and s.agents.heir(c, t.creator)) and (a is None or to.id != a.id):

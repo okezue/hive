@@ -19,6 +19,11 @@ depth = 4            # how many levels below a root agent may spawn
 fanout = 8           # live children per agent
 budget = 32          # agents a root may create in its whole subtree; spawning hands slices of it down
 
+[insights]
+auto = true          # file compose and distill tasks when there are composers or distillers to take them
+min = 2              # finished subtasks a task needs before its subtree gets composed
+global = "~/.hive/insights.db"   # library for insights saved with scope "global"; project ones live in .hive/insights.db
+
 [runner]
 max = 3
 poll = 1.0
@@ -41,6 +46,7 @@ class Cfg:
     depth: int = 4
     fanout: int = 8
     budget: int = 32
+    insights: dict = field(default_factory=dict)
 
     @property
     def dir(s): return s.db.parent.parent if s.db.parent.name == 'sessions' else s.db.parent
@@ -63,7 +69,8 @@ def load(db=None, root=None, session=None, cwd=None):
     st = tomllib.loads((d/'config.toml').read_text()) if (d/'config.toml').is_file() else {}
     h, t = st.get('hive', {}), st.get('tree', {})
     return Cfg(db, root, int(h.get('reminder', 20)), int(h.get('tries', 2)), float(h.get('stale', 900)),
-               dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 8)), int(t.get('budget', 32)))
+               dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 8)), int(t.get('budget', 32)),
+               dict(st.get('insights', {})))
 
 
 def init(root):

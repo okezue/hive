@@ -101,6 +101,11 @@ def plan(a):
 def files(a): dump(actor(opened(a), a).files(a.path))
 
 
+def insights(a):
+    for x in actor(opened(a), a).recall(' '.join(a.query), limit=a.limit)['insights']:
+        print(f"{x['insight']:<6}{x['kind']:<9}{x['state']:<12}{x['conf']:<5} {x['title']}")
+
+
 def tree(a): print(actor(opened(a), a).tree(a.of or '*', a.depth, 50)['tree'])
 
 
@@ -153,6 +158,7 @@ def parser():
     cmd(hook, opt('event', choices=EVENTS), opt('--format', default='claude', choices=['claude', 'text']))
     cmd(run, opt('--max', type=int), opt('--timeout', type=float), opt('--watch', action='store_true'), opt('--command', nargs=argparse.REMAINDER))
     cmd(tree, opt('of', nargs='?'), opt('--depth', type=int, default=2), who=True)
+    cmd(insights, opt('query', nargs='*'), opt('--limit', type=int, default=20), who=True)
     return p
 
 

@@ -1,7 +1,7 @@
 from .err import Bad, Denied, Missing
 from .util import R, J, an, dumps, name
 
-CAPS = frozenset('read write plan claim verify manage spawn fork send broadcast post use offer exec define'.split())
+CAPS = frozenset('read write plan claim verify manage spawn fork send broadcast post use offer exec define compose distill'.split())
 BASE = {'read', 'send', 'use', 'post'}
 
 ROLES = {
@@ -17,6 +17,14 @@ ROLES = {
                  'reject review tasks; the author makes the edits.', BASE | {'claim', 'verify', 'fork'}),
     'researcher': ('Investigate questions, read code and sources, and publish findings with put so others can build on them. '
                    'Leave code changes to implementers.', BASE | {'claim', 'offer', 'fork'}),
+    'composer': ('Combine what the agents under a node found into one coherent account, top down: start at the node you were given, '
+                 'compose each child subtree first (spawn sub-composers for large branches), cite the findings and compositions you '
+                 'use, state contradictions and gaps explicitly, and never add claims no agent made. Record it with compose.',
+                 BASE | {'claim', 'fork', 'compose'}),
+    'distiller': ('Turn the combined knowledge of many agents into insights worth keeping: patterns observed independently in several '
+                  'branches (observed) and lessons that transfer to future work (reusable). Look across compositions and findings, add '
+                  'evidence to existing insights before creating new ones, and weigh insights against what the evidence shows.',
+                  BASE | {'claim', 'fork', 'distill'}),
     'observer': ('Watch the hive and answer questions about it. Observers read and message only.', {'read', 'send'}),
 }
 

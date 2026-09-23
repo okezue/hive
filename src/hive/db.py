@@ -36,21 +36,37 @@ CREATE INDEX IF NOT EXISTS depOn ON deps(dep);
 CREATE TABLE IF NOT EXISTS tools(name TEXT PRIMARY KEY,owner INTEGER,about TEXT,schema TEXT,kind TEXT,argv TEXT,timeout REAL,ts REAL);
 CREATE TABLE IF NOT EXISTS calls(id INTEGER PRIMARY KEY,tool TEXT,src INTEGER,owner INTEGER,args TEXT,state TEXT,result TEXT,err TEXT,
   waitUntil REAL DEFAULT 0,ts REAL,doneAt REAL);
-CREATE TABLE IF NOT EXISTS summs(key TEXT PRIMARY KEY,text TEXT,ts REAL)
+CREATE TABLE IF NOT EXISTS summs(key TEXT PRIMARY KEY,text TEXT,ts REAL);
+CREATE TABLE IF NOT EXISTS findings(id INTEGER PRIMARY KEY,agent INTEGER,task INTEGER,text TEXT NOT NULL,kind TEXT DEFAULT 'fact',refs TEXT DEFAULT '[]',
+  tags TEXT DEFAULT '[]',conf REAL DEFAULT 0.7,ts REAL);
+CREATE INDEX IF NOT EXISTS findAgent ON findings(agent);
+CREATE TABLE IF NOT EXISTS comps(id INTEGER PRIMARY KEY,node INTEGER,author INTEGER,text TEXT NOT NULL,sources TEXT DEFAULT '[]',gaps TEXT DEFAULT '',
+  upto INTEGER DEFAULT 0,v INTEGER DEFAULT 1,ts REAL,covers TEXT DEFAULT '[]');
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,val TEXT);
+CREATE INDEX IF NOT EXISTS compNode ON comps(node,id)
+'''
+LIB = '''
+CREATE TABLE IF NOT EXISTS insights(id INTEGER PRIMARY KEY,kind TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,tags TEXT DEFAULT '[]',
+  state TEXT DEFAULT 'proposed',support INTEGER DEFAULT 0,against INTEGER DEFAULT 0,conf REAL DEFAULT 0.5,uses INTEGER DEFAULT 0,author TEXT,
+  ts REAL,seen REAL,note TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS evidence(id INTEGER PRIMARY KEY,insight INTEGER,stance TEXT,ref TEXT,text TEXT,agent TEXT,path TEXT,branch TEXT,
+  session TEXT,ts REAL);
+CREATE INDEX IF NOT EXISTS evIns ON evidence(insight)
 '''
 ADD = (('agents', 'keeper', 'INTEGER'), ('agents', 'depth', 'INTEGER DEFAULT 0'), ('agents', 'budget', 'INTEGER DEFAULT 0'),
        ('agents', 'goal', "TEXT DEFAULT ''"), ('agents', 'launch', 'TEXT'), ('agents', 'deleg', 'INTEGER'), ('agents', 'grants', 'TEXT'),
-       ('tasks', 'deliver', "TEXT DEFAULT ''"))
+       ('tasks', 'deliver', "TEXT DEFAULT ''"), ('tasks', 'node', 'INTEGER'))
 
 
 class Db:
-    def __init__(s, path, seed=32):
-        s.path = Path(path)
-        s.path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(s, path, seed=32, schema=SCHEMA, add=ADD, ro=False):
+        s.path, s.ro = Path(path).expanduser(), ro
         s.loc, s.lock, s.conns, s.added = threading.local(), threading.Lock(), [], set()
+        if ro: return
+        s.path.parent.mkdir(parents=True, exist_ok=True)
         with s.tx() as c:
-            for q in SCHEMA.split(';'): c.execute(q)
-            for t, col, decl in ADD:
+            for q in schema.split(';'): c.execute(q)
+            for t, col, decl in add:
                 if col not in {r.name for r in c.execute(f'PRAGMA table_info({t})')}:
                     c.execute(f'ALTER TABLE {t} ADD COLUMN {col} {decl}')
                     s.added.add(col)
@@ -61,9 +77,9 @@ class Db:
 
     def conn(s):
         if (c := getattr(s.loc, 'c', None)) is None:
-            c = sqlite3.connect(s.path, timeout=30, isolation_level=None, check_same_thread=False)
+            c = sqlite3.connect(f'file:{s.path}?mode=ro' if s.ro else s.path, timeout=30, isolation_level=None, check_same_thread=False, uri=s.ro)
             c.row_factory = row
-            for p in ('busy_timeout=30000', 'journal_mode=WAL', 'synchronous=NORMAL'): c.execute('PRAGMA '+p)
+            for p in ('busy_timeout=30000',) + (() if s.ro else ('journal_mode=WAL', 'synchronous=NORMAL')): c.execute('PRAGMA '+p)
             s.loc.c, s.loc.depth = c, 0
             with s.lock: s.conns.append(c)
         return c

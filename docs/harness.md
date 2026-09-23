@@ -70,7 +70,7 @@ Run one HTTP server next to the hive and point clients at it:
 HIVE_KEY=<secret> hive mcp --http --host 0.0.0.0 --port 8765
 ```
 
-Clients connect to `http://<host>:8765/mcp`. Over HTTP every call must carry the caller's `join` token as `agent`, and joining with a role that can run commands or manage agents (`coordinator`, or a custom role with `exec`, `define`, `spawn`, or `manage`) requires `key=<secret>`. The server refuses to listen beyond localhost unless `HIVE_KEY` is set. Put it behind TLS when it crosses an untrusted network.
+Clients connect to `http://<host>:8765/mcp`. Over HTTP every call must carry the caller's `join` token as `agent`, and joining with a role that can run commands, manage agents, or write compositions and insights (`coordinator`, `composer`, `distiller`, or a custom role with `exec`, `define`, `spawn`, `manage`, `compose`, or `distill`) requires `key=<secret>`. The server refuses to listen beyond localhost unless `HIVE_KEY` is set. Put it behind TLS when it crosses an untrusted network.
 
 ## Starting agents for a plan, and recursive spawning
 
@@ -86,10 +86,16 @@ command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
 
 [runner.roles.verifier]
 command = ["codex", "exec", "{prompt}"]
+
+[runner.roles.composer]
+command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
+
+[runner.roles.distiller]
+command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
 ```
 
 ```sh
 hive plan plan.json && hive run
 ```
 
-The runner starts agents as their tasks become ready, up to `max` at a time, passes each one `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, logs its output under `.hive/run/`, and retries or fails tasks whose agent exits without finishing.
+With commands for `composer` and `distiller`, the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, up to `max` at a time, passes each one `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, logs its output under `.hive/run/`, and retries or fails tasks whose agent exits without finishing.

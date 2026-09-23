@@ -1,4 +1,4 @@
-import inspect, json, os, threading
+import inspect, json, os, sqlite3, threading
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
@@ -15,6 +15,7 @@ GROUPS = {
     'files': 'read edit write sync diff release claim files merges propose respond abandon',
     'tasks': 'plan tasks task take done fail verify cancel dispatch define assign',
     'tree': 'spawn gather tree node walk path find brief fund adopt escalate decide issues',
+    'know': 'note findings material compose gist stale harvest distill recall weigh retire',
     'tools': 'offer tools call answer result withdraw',
 }
 
@@ -84,6 +85,21 @@ DOCS = {
     'escalate': 'Ask your keeper for a decision (options, or extra budget via fund) instead of guessing; it moves up the tree if they pass it on.',
     'decide': "Answer an issue raised to you: a choice (and optionally budget), or choice='up' to pass it to your own keeper.",
     'issues': 'Open issues you raised or hold (all=true for every open issue).',
+    'note': "Record a finding as you work: a fact, decision, problem, method, or result, with refs to evidence (files, tasks, messages; "
+            "'against:f12' marks a contradiction). Composers and distillers build on findings.",
+    'findings': 'Findings recorded by an agent and (deep) everyone below it, newest first, with where each came from.',
+    'material': "A composer's input for one node: its own findings, each child's composition (or raw findings if uncomposed), and flagged contradictions.",
+    'compose': 'Composers: record the combined account of a node and its subtree, citing the findings (f..) and child compositions (cp..) it uses. '
+               'Reports findings and branches left out.',
+    'gist': "The latest composition of a node's subtree and whether new findings have arrived since.",
+    'stale': 'Nodes below one whose compositions are missing or out of date, deepest first: the composing worklist.',
+    'harvest': "A distiller's input: each independent branch's composition or findings, echoes (terms that recur across branches, with the "
+               'findings they came from), and saved insights that look related.',
+    'distill': "Distillers: save an insight, 'observed' (a pattern in the work) or 'reusable' (a lesson for future work), citing evidence. "
+               'Similar saved insights are shown first so you add evidence instead of duplicating (into=<id>).',
+    'recall': 'Search insights saved in this project (and the global library) by relevance and confidence.',
+    'weigh': 'Add evidence for or against a saved insight. Support from independent branches raises its confidence; counter-evidence contests it.',
+    'retire': 'Distillers and coordinators: retire an insight that no longer holds.',
     'define': 'Coordinators: define a role with a charter and capabilities.',
     'assign': "Coordinators: change an agent's role; it is interrupted with its new charter.",
     'offer': "Share a tool. kind 'agent': calls come to you and you reply with answer; 'command': Hive runs argv with the arguments "
@@ -123,12 +139,22 @@ ARGS = {
     'tree.depth': 'Levels below the node to show',
     'tree.after': 'Continue a wide level after this child',
     'fund.amount': 'Budget to hand down',
+    'note.kind': 'fact, decision, problem, method, or result',
+    'note.refs': "Evidence such as 'src/a.py:40', 't3', 'm12', or 'against:f7' for a contradiction",
+    'compose.sources': 'The findings (f12) and child compositions (cp3) you combined',
+    'compose.gaps': 'What is unknown or unresolved',
+    'distill.kind': 'observed or reusable',
+    'distill.evidence': 'Findings (f..), compositions (cp..), or tasks (t..); cite one from each branch that shows it',
+    'distill.scope': 'project (this repository) or global (every project on this machine)',
+    'distill.into': 'Add your evidence to this existing insight instead of saving a new one',
+    'weigh.stance': 'support or against',
+    'recall.state': 'proposed, established, or contested',
     'dispatch.budget': 'Budget to give the new agent out of yours (default 0)',
     'chain': 'Run the tasks in order, each after the previous',
 }
 
 
-PRIV = {'exec', 'define', 'spawn', 'manage'}
+PRIV = {'exec', 'define', 'spawn', 'manage', 'compose', 'distill'}
 
 
 class Who:
@@ -188,6 +214,7 @@ def wrap(name, who):
         try: x = who(kw.pop('agent', None))
         except Err as e: raise ToolError(str(e)) from None
         try: res = getattr(x, name)(**kw)
+        except sqlite3.Error as e: raise ToolError(f'storage error: {e}') from None
         except Err as e:
             n = x.notices()
             raise ToolError(str(e) + (f'\n\n{render({}, n)}' if n else '')) from None

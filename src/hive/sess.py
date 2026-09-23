@@ -304,8 +304,9 @@ class Sess:
     def promptFor(s, kid, i):
         a, h = kid.agent, s.hive
         if a.launch: return h.tree.prompt(a)
-        return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token), h.tasks.show(h.tasks.get(i), full=True),
-                          h.tasks.context(a, i).get('dependencies'))
+        t = h.tasks.get(i)
+        return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token), h.tasks.show(t, full=True),
+                          h.tasks.context(a, i).get('dependencies'), None if t.kind == 'verify' else h.know.tips(f'{t.title} {t.about}'))
 
     def define(s, name: str, charter: str, caps: list[str]):
         a = s._me()
@@ -354,6 +355,36 @@ class Sess:
     def decide(s, id: str, choice: str, note: str = '', fund: int | None = None): return s.hive.tree.decide(s._me(), id, choice, note, fund)
 
     def issues(s, all: bool = False): return {'issues': s.hive.tree.issues(s._me(), not all)}
+
+    def note(s, text: str, kind: str = 'fact', refs: list[str] | None = None, tags: list[str] | None = None, conf: float = .7):
+        return s.hive.know.note(s._me(), text, kind, refs, tags, conf)
+
+    def findings(s, of: str | None = None, deep: bool = True, kind: str | None = None, since: int = 0, limit: int = 50):
+        return s.hive.know.findings(s._me(), of, deep, kind, since, limit)
+
+    def material(s, of: str | None = None, budget: int = 3000): return s.hive.know.material(s._me(), of, budget)
+
+    def compose(s, of: str, text: str, sources: list[str] | None = None, gaps: str = ''):
+        return s.hive.know.compose(s._me(), of, text, sources, gaps)
+
+    def gist(s, of: str | None = None): return s.hive.know.gist(s._me(), of)
+
+    def stale(s, of: str | None = None, limit: int = 30): return s.hive.know.stale(s._me(), of, limit)
+
+    def harvest(s, of: str | None = None, budget: int = 3000): return s.hive.know.harvest(s._me(), of, budget)
+
+    def distill(s, title: str, body: str, kind: str = 'observed', evidence: list[str] | None = None, tags: list[str] | None = None,
+                scope: str = 'project', into: str | None = None, force: bool = False):
+        return s.hive.know.distill(s._me(), title, body, kind, evidence, tags, scope, into, force)
+
+    def recall(s, query: str = '', kind: str | None = None, state: str | None = None, scope: str | None = None, limit: int = 8):
+        s._me()
+        return {'insights': s.hive.know.recall(query, kind, state, scope, limit)}
+
+    def weigh(s, id: str, stance: str = 'support', evidence: list[str] | None = None, note: str = ''):
+        return s.hive.know.weigh(s._me(), id, stance, evidence, note)
+
+    def retire(s, id: str, reason: str): return s.hive.know.retire(s._me(), id, reason)
 
     def offer(s, name: str, about: str, schema: dict[str, Any] | None = None, kind: str = 'agent', argv: list[str] | None = None,
               timeout: float = 60):

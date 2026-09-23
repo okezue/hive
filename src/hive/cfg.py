@@ -14,6 +14,11 @@ model = "grok-4.5"
 api_key_env = "XAI_API_KEY"
 chunk = 3000
 
+[tree]
+depth = 4            # how many levels below a root agent may spawn
+fanout = 8           # live children per agent
+budget = 32          # agents a root may create in its whole subtree; spawning hands slices of it down
+
 [runner]
 max = 3
 poll = 1.0
@@ -33,6 +38,9 @@ class Cfg:
     stale: float = 900.
     summ: dict = field(default_factory=dict)
     runner: dict = field(default_factory=dict)
+    depth: int = 4
+    fanout: int = 8
+    budget: int = 32
 
     @property
     def dir(s): return s.db.parent.parent if s.db.parent.name == 'sessions' else s.db.parent
@@ -53,9 +61,9 @@ def load(db=None, root=None, session=None, cwd=None):
     root = root or os.environ.get('HIVE_ROOT')
     root = Path(root).expanduser().resolve() if root else d.parent if d.name == '.hive' else cwd
     st = tomllib.loads((d/'config.toml').read_text()) if (d/'config.toml').is_file() else {}
-    h = st.get('hive', {})
+    h, t = st.get('hive', {}), st.get('tree', {})
     return Cfg(db, root, int(h.get('reminder', 20)), int(h.get('tries', 2)), float(h.get('stale', 900)),
-               dict(st.get('summarizer', {})), dict(st.get('runner', {})))
+               dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 8)), int(t.get('budget', 32)))
 
 
 def init(root):

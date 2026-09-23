@@ -101,6 +101,9 @@ def plan(a):
 def files(a): dump(actor(opened(a), a).files(a.path))
 
 
+def tree(a): print(actor(opened(a), a).tree(a.of or '*', a.depth, 50)['tree'])
+
+
 def merges(a): dump(actor(opened(a), a).merges(a.id, a.state))
 
 
@@ -111,7 +114,8 @@ def hook(a):
 
 def run(a):
     from .run import Runner
-    kw = {'say': lambda t: print('[run]', t, flush=True)} | ({'cmds': {'default': a.command}} if a.command else {}) | ({'cap': a.max} if a.max else {})
+    kw = {'say': lambda t: print('[run]', t, flush=True), 'watch': a.watch} | ({'cmds': {'default': a.command}} if a.command else {}) | \
+        ({'cap': a.max} if a.max else {})
     r = Runner.fromCfg(opened(a), **kw).run(a.timeout)
     dump(r)
     return 1 if r['stuck'] else 0
@@ -147,7 +151,8 @@ def parser():
     cmd(files, opt('path', nargs='?'), who=True)
     cmd(merges, opt('id', nargs='?'), opt('--state', default='open'), who=True)
     cmd(hook, opt('event', choices=EVENTS), opt('--format', default='claude', choices=['claude', 'text']))
-    cmd(run, opt('--max', type=int), opt('--timeout', type=float), opt('--command', nargs=argparse.REMAINDER))
+    cmd(run, opt('--max', type=int), opt('--timeout', type=float), opt('--watch', action='store_true'), opt('--command', nargs=argparse.REMAINDER))
+    cmd(tree, opt('of', nargs='?'), opt('--depth', type=int, default=2), who=True)
     return p
 
 

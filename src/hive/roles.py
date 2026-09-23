@@ -1,7 +1,7 @@
 from .err import Bad, Denied, Missing
 from .util import R, J, an, dumps, name
 
-CAPS = frozenset('read write plan claim verify manage spawn send broadcast post use offer exec define'.split())
+CAPS = frozenset('read write plan claim verify manage spawn fork send broadcast post use offer exec define'.split())
 BASE = {'read', 'send', 'use', 'post'}
 
 ROLES = {
@@ -9,14 +9,14 @@ ROLES = {
                     'progress, and settle disputes. Leave implementation and verification to the agents whose roles cover them.', CAPS),
     'implementer': ('Implement the task you took, inside the paths it names. Edit shared files through Hive so concurrent '
                     'changes merge, post progress, and hand finished work to verification with done. Ask the owner of a '
-                    'region before changing it.', BASE | {'write', 'claim', 'plan', 'offer'}),
+                    'region before changing it.', BASE | {'write', 'claim', 'plan', 'offer', 'fork'}),
     'verifier': ('Independently check work others finished: read the change, run the tests or checks, and approve or reject '
                  'it with verify and concrete evidence. Report defects to the implementer; do not fix them yourself.',
-                 BASE | {'claim', 'verify', 'offer'}),
+                 BASE | {'claim', 'verify', 'offer', 'fork'}),
     'reviewer': ('Review designs and changes for correctness, clarity, and fit. Send findings to the author and approve or '
-                 'reject review tasks; the author makes the edits.', BASE | {'claim', 'verify'}),
+                 'reject review tasks; the author makes the edits.', BASE | {'claim', 'verify', 'fork'}),
     'researcher': ('Investigate questions, read code and sources, and publish findings with put so others can build on them. '
-                   'Leave code changes to implementers.', BASE | {'claim', 'offer'}),
+                   'Leave code changes to implementers.', BASE | {'claim', 'offer', 'fork'}),
     'observer': ('Watch the hive and answer questions about it. Observers read and message only.', {'read', 'send'}),
 }
 
@@ -25,7 +25,7 @@ class Roles:
     def __init__(s, db):
         s.db = db
         with db.tx() as c:
-            c.executemany('INSERT OR IGNORE INTO roles VALUES(?,?,?,1)', [(k, ch, dumps(sorted(cp))) for k, (ch, cp) in ROLES.items()])
+            c.executemany('INSERT OR REPLACE INTO roles VALUES(?,?,?,1)', [(k, ch, dumps(sorted(cp))) for k, (ch, cp) in ROLES.items()])
 
     def _r(s, r): return R(name=r.name, charter=r.charter, caps=frozenset(J(r.caps, [])), builtin=bool(r.builtin))
 
@@ -46,10 +46,12 @@ class Roles:
             c.execute('INSERT OR REPLACE INTO roles VALUES(?,?,?,0)', (n, charter.strip(), dumps(sorted(set(caps)))))
         return s.get(n)
 
-    def can(s, a, cap): return cap in s.get(a.role).caps
+    def caps(s, a): return frozenset(J(a.grants)) if a.get('grants') else s.get(a.role).caps
+
+    def can(s, a, cap): return cap in s.caps(a)
 
     def need(s, a, cap, act):
         if not s.can(a, cap):
             r = s.get(a.role)
-            raise Denied(f'{a.name} is {an(r.name)}, and that role cannot {act} (needs {cap})',
+            raise Denied(f"{a.name} is {an(r.name)}{' with narrowed grants' if a.get('grants') else ''}, and cannot {act} (needs {cap})",
                          f'your charter: {r.charter} Ask an agent whose role covers it, or a coordinator to reassign you')

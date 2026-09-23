@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS roles(name TEXT PRIMARY KEY,charter TEXT NOT NULL,cap
 CREATE TABLE IF NOT EXISTS agents(id INTEGER PRIMARY KEY,name TEXT UNIQUE NOT NULL,role TEXT NOT NULL,token TEXT UNIQUE NOT NULL,
   wf INTEGER,parent INTEGER,about TEXT DEFAULT '',state TEXT DEFAULT 'active',status TEXT DEFAULT '',task INTEGER,
   calls INTEGER DEFAULT 0,joined REAL,seen REAL);
+CREATE INDEX IF NOT EXISTS agentParent ON agents(parent);
+CREATE TABLE IF NOT EXISTS issues(id INTEGER PRIMARY KEY,src INTEGER,holder INTEGER,need TEXT,options TEXT DEFAULT '[]',state TEXT DEFAULT 'open',
+  choice TEXT,note TEXT DEFAULT '',fund INTEGER DEFAULT 0,ts REAL,doneAt REAL);
 CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,ts REAL,agent INTEGER,wf INTEGER,kind TEXT,topic TEXT,text TEXT,data TEXT);
 CREATE INDEX IF NOT EXISTS evAgent ON events(agent,seq);
 CREATE TABLE IF NOT EXISTS subs(agent INTEGER,topic TEXT,PRIMARY KEY(agent,topic));
@@ -35,15 +38,26 @@ CREATE TABLE IF NOT EXISTS calls(id INTEGER PRIMARY KEY,tool TEXT,src INTEGER,ow
   waitUntil REAL DEFAULT 0,ts REAL,doneAt REAL);
 CREATE TABLE IF NOT EXISTS summs(key TEXT PRIMARY KEY,text TEXT,ts REAL)
 '''
+ADD = (('agents', 'keeper', 'INTEGER'), ('agents', 'depth', 'INTEGER DEFAULT 0'), ('agents', 'budget', 'INTEGER DEFAULT 0'),
+       ('agents', 'goal', "TEXT DEFAULT ''"), ('agents', 'launch', 'TEXT'), ('agents', 'deleg', 'INTEGER'), ('agents', 'grants', 'TEXT'),
+       ('tasks', 'deliver', "TEXT DEFAULT ''"))
 
 
 class Db:
-    def __init__(s, path):
+    def __init__(s, path, seed=32):
         s.path = Path(path)
         s.path.parent.mkdir(parents=True, exist_ok=True)
-        s.loc, s.lock, s.conns = threading.local(), threading.Lock(), []
+        s.loc, s.lock, s.conns, s.added = threading.local(), threading.Lock(), [], set()
         with s.tx() as c:
             for q in SCHEMA.split(';'): c.execute(q)
+            for t, col, decl in ADD:
+                if col not in {r.name for r in c.execute(f'PRAGMA table_info({t})')}:
+                    c.execute(f'ALTER TABLE {t} ADD COLUMN {col} {decl}')
+                    s.added.add(col)
+            if 'budget' in s.added:
+                c.execute('UPDATE agents SET budget=CASE WHEN parent IS NULL THEN ? ELSE 0 END,keeper=parent', (seed,))
+                c.execute('WITH RECURSIVE d(id,n) AS (SELECT id,0 FROM agents WHERE parent IS NULL UNION ALL SELECT a.id,d.n+1 FROM agents a '
+                          'JOIN d ON a.parent=d.id) UPDATE agents SET depth=COALESCE((SELECT n FROM d WHERE d.id=agents.id),0)')
 
     def conn(s):
         if (c := getattr(s.loc, 'c', None)) is None:

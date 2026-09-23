@@ -1,12 +1,12 @@
 from .err import Anon, Bad, Clash, Missing
-from .util import name, now, token
+from .util import J, dumps, name, now, token
 
-STATES = ('active', 'idle', 'done', 'left')
+STATES = ('pending', 'active', 'idle', 'done', 'left')
 
 
 class Agents:
-    def __init__(s, db, log, roles, stale):
-        s.db, s.log, s.roles, s.stale = db, log, roles, stale
+    def __init__(s, db, log, roles, stale, seed=32):
+        s.db, s.log, s.roles, s.stale, s.seed, s.left = db, log, roles, stale, seed, []
 
     def wf(s, c, n, creator=None):
         name(n, 'workflow name')
@@ -29,12 +29,14 @@ class Agents:
                 if old.state != 'left' and ts-old.seen < s.stale and not takeover:
                     raise Clash(f'an active agent is already named {n!r}',
                                 'pick another name, pass its token as agent, or join with takeover if you are it restarting')
-                c.execute("UPDATE agents SET role=?,token=?,wf=?,parent=?,about=?,state='active',status='',task=NULL,joined=?,seen=? "
-                          "WHERE id=?", (role, t, w, parent, about, ts, ts, old.id))
+                g = old.grants and dumps(sorted(set(J(old.grants)) & s.roles.get(role).caps))
+                c.execute("UPDATE agents SET role=?,token=?,wf=?,about=?,state='active',status='',task=NULL,joined=?,seen=?,grants=? "
+                          "WHERE id=?", (role, t, w, about, ts, ts, g, old.id))
                 aid = old.id
             else:
-                aid = c.execute('INSERT INTO agents(name,role,token,wf,parent,about,joined,seen) VALUES(?,?,?,?,?,?,?,?)',
-                                (n, role, t, w, parent, about, ts, ts)).lastrowid
+                p = parent and c.execute('SELECT depth FROM agents WHERE id=?', (parent,)).fetchone()
+                aid = c.execute('INSERT INTO agents(name,role,token,wf,parent,keeper,depth,budget,about,joined,seen) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                                (n, role, t, w, parent, parent, p.depth+1 if p else 0, 0 if parent else s.seed, about, ts, ts)).lastrowid
             s.log.add(c, aid, 'agent.joined', f'joined as {role}' + (f' in {wf}' if wf else ''), f'agent:{n}', wf=w)
             s.log.setCur(c, aid, 'notices', s.log.last())
         return s.get(aid)
@@ -54,12 +56,25 @@ class Agents:
 
     def names(s): return {r.id: r.name for r in s.db.q('SELECT id,name FROM agents')}
 
+    def heir(s, c, aid):
+        for i in s.above(aid):
+            if (r := c.execute('SELECT * FROM agents WHERE id=?', (i,)).fetchone()).state != 'left': return r
+        return None
+
+    def below(s, aid, depth=64):
+        return [r.id for r in s.db.q('WITH RECURSIVE sub(id,d) AS (SELECT ?,0 UNION ALL SELECT a.id,sub.d+1 FROM agents a JOIN sub ON a.parent=sub.id '
+                                     'WHERE sub.d<?) SELECT id FROM sub', (aid, depth))]
+
+    def above(s, aid):
+        return [r.id for r in s.db.q('WITH RECURSIVE up(id,p,d) AS (SELECT id,parent,0 FROM agents WHERE id=? UNION ALL SELECT a.id,a.parent,up.d+1 '
+                                     'FROM agents a JOIN up ON a.id=up.p WHERE up.d<64) SELECT id FROM up ORDER BY d', (aid,))]
+
     def all(s, wf=None, gone=False):
         return s.db.q('SELECT * FROM agents WHERE (? IS NULL OR wf=?) AND (? OR state!=\'left\') ORDER BY id', (wf, wf, gone))
 
     def touch(s, a):
         with s.db.tx() as c:
-            return c.execute("UPDATE agents SET seen=?,calls=calls+1,state=CASE WHEN state IN ('idle','done') THEN 'active' ELSE state END "
+            return c.execute("UPDATE agents SET seen=?,calls=calls+1,state=CASE WHEN state IN ('idle','done','pending') THEN 'active' ELSE state END "
                              "WHERE id=? RETURNING *", (now(), a.id)).fetchone()
 
     def set(s, c, aid, **kv):
@@ -67,12 +82,19 @@ class Agents:
         if kv.get('state', 'active') not in STATES: raise Bad(f"invalid state {kv['state']!r}", ', '.join(STATES))
         if 'role' in kv: s.roles.get(kv['role'])
         c.execute(f"UPDATE agents SET {','.join(k+'=?' for k in kv)} WHERE id=?", (*kv.values(), aid))
+        if kv.get('state') == 'left':
+            for f in s.left: f(c, aid)
 
     def resolve(s, to, me):
         live = [a for a in s.all() if a.id != me.id]
         if to in ('*', 'all'): return live
         if to == 'parent': return [a for a in live if a.id == me.parent]
+        if to == 'keeper': return [a for a in live if a.id == (me.keeper or me.parent)]
         if to == 'children': return [a for a in live if a.parent == me.id]
+        if to == 'siblings': return [a for a in live if me.parent and a.parent == me.parent]
+        if to in ('subtree', 'ancestors'):
+            ids = set(s.below(me.id) if to == 'subtree' else s.above(me.id)) - {me.id}
+            return [a for a in live if a.id in ids]
         if to.startswith('role:'):
             s.roles.get(to[5:])
             return [a for a in live if a.role == to[5:]]

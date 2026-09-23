@@ -4,6 +4,7 @@ from .err import Bad, Clash, Denied, Missing
 from .util import J, ago, an, clip, dumps, line, now, pid, toks
 
 TERMINAL = ('done', 'failed', 'cancelled')
+SETTLED = ('done', 'failed', 'cancelled', 'blocked')
 DEAD = ('failed', 'cancelled', 'blocked')
 DOWN = "WITH RECURSIVE down(id) AS (SELECT task FROM deps WHERE dep=? UNION SELECT d.task FROM deps d JOIN down ON d.dep=down.id) "
 
@@ -35,7 +36,7 @@ class Tasks:
         if t.wf: out['workflow'] = s.agents.wfNames().get(t.wf)
         if full:
             out |= {'about': t.about, 'tries': t.tries, 'creator': names.get(t.creator), 'created': ago(t.ts)}
-            for k in ('result', 'notes', 'parent'):
+            for k in ('deliver', 'result', 'notes', 'parent'):
                 if t[k]: out[k] = f't{t[k]}' if k == 'parent' else t[k]
         elif t.result: out['result'] = line(t.result)
         return out
@@ -130,6 +131,20 @@ class Tasks:
             t = s.get(t.id, c)
         return {'task': s.show(t, full=True)} | s.depCtx(t, 2000)
 
+    def delegate(s, c, a, kid, goal, deliver, role, paths, verify):
+        v = 'verifier' if verify is True else verify or None
+        if v: s.roles.get(v)
+        run = [r.id for r in s.running(c, a.id)]
+        own = a.deleg and c.execute("SELECT id FROM tasks WHERE id=? AND state NOT IN ('done','failed','cancelled','blocked')", (a.deleg,)).fetchone()
+        par = a.task if a.task in run else run[0] if run else own and own.id
+        i = c.execute("INSERT INTO tasks(wf,title,about,role,kind,state,creator,owner,parent,verify,paths,deliver,ts) "
+                      "VALUES(?,?,?,?,'work','ready',?,?,?,?,?,?,?)",
+                      (a.wf, line(goal, 80), goal, role, a.id, kid.id, par, v, dumps(paths or []), deliver or '', now())).lastrowid
+        s.log.sub(c, a.id, f'task:t{i}')
+        s.log.add(c, a.id, 'task.created', f't{i} delegated to {kid.name}' + (f' under t{par}' if par else '') + f': {line(goal, 80)}',
+                  f'task:t{i}', wf=a.wf)
+        return i
+
     def mine(s, a, t, act):
         if t.owner != a.id and not s.roles.can(a, 'manage'):
             raise Denied(f"t{t.id} belongs to {s.agents.names().get(t.owner, 'nobody')}; only its owner or a coordinator can {act} it")
@@ -140,6 +155,9 @@ class Tasks:
             t = s.get(pid('t', ref, 'task'), c)
             s.mine(a, t, 'finish')
             if t.kind == 'verify': raise Bad('verification tasks finish with verify')
+            if open := c.execute("SELECT id FROM tasks WHERE parent=? AND kind!='verify' AND state NOT IN ('done','failed','cancelled','blocked')",
+                                 (t.id,)).fetchall():
+                raise Clash(f"t{t.id} still has unsettled subtasks {', '.join(f't{x.id}' for x in open)}", 'gather them, or cancel them, before finishing')
             if t.state == 'ready' and t.owner == a.id: c.execute('UPDATE tasks SET startAt=? WHERE id=?', (now(), t.id))
             elif t.state != 'running': raise Clash(f't{t.id} is {t.state}, not running')
             s.unset(c, t.owner, t.id)
@@ -187,6 +205,9 @@ class Tasks:
                 s.finish(c, a, s.get(o.id, c), 'done', o.result or '', log=False)
                 return {'task': s.show(s.get(o.id, c)), 'verdict': verdict, 'unblocked': s.ready(c, o.id)}
             if not o.owner or s.agents.get(o.owner).state == 'left':
+                if s.spawned(c, o):
+                    s.finish(c, a, o, 'failed', f'rejected by {a.name} after its author left: {notes}')
+                    return {'task': s.show(s.get(o.id, c)), 'verdict': verdict, 'note': 'its author is gone, so the delegation failed back to its parent'}
                 c.execute("UPDATE tasks SET state='ready',owner=NULL WHERE id=?", (o.id,))
                 return {'task': s.show(s.get(o.id, c)), 'verdict': verdict, 'note': 'its author is gone, so it is ready for someone else'}
             c.execute("UPDATE tasks SET state='running' WHERE id=?", (o.id,))
@@ -204,10 +225,12 @@ class Tasks:
             if t.state not in ('running', 'ready'): raise Clash(f't{t.id} is {t.state}')
             return {'task': s.show(s.get(s.drop(c, a, t, reason, retry), c))}
 
+    def spawned(s, c, t): return bool(t.owner and c.execute('SELECT 1 FROM agents WHERE deleg=? AND id=? AND launch IS NOT NULL', (t.id, t.owner)).fetchone())
+
     def drop(s, c, a, t, why, retry=True):
         s.unset(c, t.owner, t.id)
         notes = dumps([*t.notes, {'by': a.name if a else 'runner', 'failed': why}])
-        if retry and t.tries < s.tries:
+        if retry and t.tries < s.tries and not s.spawned(c, t):
             c.execute("UPDATE tasks SET state='ready',owner=NULL,notes=? WHERE id=?", (notes, t.id))
             s.log.add(c, a and a.id, 'task.released', f't{t.id} released for retry: {line(why, 100)}', f'task:t{t.id}', wf=t.wf)
         else:
@@ -223,7 +246,9 @@ class Tasks:
     def cancel(s, a, ref, reason):
         with s.db.tx() as c:
             t = s.get(pid('t', ref, 'task'), c)
-            if t.creator != a.id and not s.roles.can(a, 'manage'): raise Denied('only the creator or a coordinator can cancel a task')
+            boss = t.parent and c.execute('SELECT owner FROM tasks WHERE id=?', (t.parent,)).fetchone()
+            if t.creator != a.id and not s.roles.can(a, 'manage') and not (boss and boss.owner == a.id):
+                raise Denied('only the creator, the owner of its parent task, or a coordinator can cancel a task')
             if t.state in TERMINAL: raise Clash(f't{t.id} is already {t.state}')
             if t.state == 'running' and t.owner not in (None, a.id):
                 s.mail.put(c, a, [t.owner], f"t{t.id} '{t.title}' was cancelled by {a.name}: {reason}. Stop working on it.", 'interrupt', 'task',
@@ -238,15 +263,34 @@ class Tasks:
         c.execute('UPDATE tasks SET owner=?,tries=tries+1 WHERE id=?', (aid, i))
         s.log.add(c, a.id, 'task.dispatched', f't{i} reserved for {s.agents.names().get(aid)}', f'task:t{i}', wf=t.wf)
 
+    def settle(s, c, tid):
+        if (o := c.execute('SELECT id,parent,budget FROM agents WHERE deleg=? AND launch IS NOT NULL', (tid,)).fetchone()) and o.budget > 0 \
+                and (h := o.parent and s.agents.heir(c, o.parent)):
+            c.execute('UPDATE agents SET budget=budget+? WHERE id=?', (o.budget, h.id))
+            c.execute('UPDATE agents SET budget=0 WHERE id=?', (o.id,))
+
     def finish(s, c, a, t, state, result, log=True):
         c.execute('UPDATE tasks SET state=?,result=?,doneAt=? WHERE id=?', (state, result, now(), t.id))
+        s.settle(c, t.id)
         if log: s.log.add(c, a and a.id, 'task.' + ('completed' if state == 'done' else state), f't{t.id} {state}: {line(result, 120)}',
                           f'task:t{t.id}', wf=t.wf)
-        if t.creator and (a is None or t.creator != a.id):
-            s.mail.put(c, a, [t.creator], f"t{t.id} '{t.title}' is {state}: {line(result, 300)}", 'steer' if state == 'done' else 'interrupt',
+        if (to := t.creator and s.agents.heir(c, t.creator)) and (a is None or to.id != a.id):
+            s.mail.put(c, a, [to.id], f"t{t.id} '{t.title}' is {state}: {line(result, 300)}", 'steer' if state == 'done' else 'interrupt',
                        'task', {'task': f't{t.id}', 'state': state}, log=False)
         if state == 'done': return
         s.block(c, a, t.id, f't{t.id} {state}')
+        for r in c.execute("WITH RECURSIVE kid(id) AS (SELECT id FROM tasks WHERE parent=? AND kind!='verify' UNION SELECT x.id FROM tasks x "
+                           "JOIN kid ON x.parent=kid.id WHERE x.kind!='verify') UPDATE tasks SET state='cancelled',doneAt=?,result=? "
+                           "WHERE id IN (SELECT id FROM kid) AND state IN ('pending','ready','running','in_review') RETURNING id,owner,title,wf",
+                           (t.id, now(), f'parent task t{t.id} {state}')).fetchall():
+            s.log.add(c, a and a.id, 'task.cancelled', f't{r.id} cancelled: parent task t{t.id} {state}', f'task:t{r.id}', wf=r.wf)
+            c.execute("UPDATE tasks SET state='cancelled',doneAt=? WHERE checks=? AND kind='verify' AND state IN ('ready','running')", (now(), r.id))
+            s.block(c, a, r.id, f't{r.id} cancelled')
+            s.settle(c, r.id)
+            if r.owner:
+                s.unset(c, r.owner, r.id)
+                s.mail.put(c, a, [r.owner], f"t{r.id} '{r.title}' was cancelled because its parent task t{t.id} is {state}. Stop and report "
+                           'anything worth keeping with send.', 'interrupt', 'task', {'task': f't{r.id}'}, log=False)
         c.execute("UPDATE tasks SET state='cancelled',doneAt=? WHERE checks=? AND kind='verify' AND state IN ('ready','running')", (now(), t.id))
         if t.kind == 'verify' and (o := s.get(t.checks, c)).state == 'in_review':
             s.finish(c, a, o, 'failed', f'verification t{t.id} {state}: {result}')

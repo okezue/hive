@@ -24,6 +24,8 @@ class Notice:
         if q := s.mail.queued(a.id): out['queued'] = f'{q} queued message(s); read them with inbox at a stopping point'
         if ups := s.updates(a, names, eat): out['updates'] = ups
         if mrs := [f'mr{m.id}' for m in s.mrs.involving(a.id) if a.id in s.mrs.waiting(m)]: out['mergesWaitingOnYou'] = mrs
+        if iss := s.log.db.q("SELECT id FROM issues WHERE holder=? AND state='open' ORDER BY id", (a.id,)):
+            out['issuesWaitingOnYou'] = [f'i{x.id}' for x in iss]
         if s.every and a.calls and a.calls % s.every == 0:
             r = s.roles.get(a.role)
             out['roleReminder'] = f"You are {a.name}, {an(r.name)}. {r.charter}" + (f' Your task is t{a.task}.' if a.task else '')

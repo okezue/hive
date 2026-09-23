@@ -9,7 +9,7 @@ from .log import fmt
 from .mail import show
 from .merge import lines as split
 from .prompt import brief, task as taskPrompt
-from .util import line, now, pid, poll
+from .util import J, dumps, line, now, pid, poll
 
 TOPICS = ('file:', 'context:', 'agent:', 'task:', 'tool:', 'thread:', 'kind:')
 
@@ -59,7 +59,7 @@ class Sess:
     def me(s):
         a, h = s._me(), s.hive
         r = h.roles.get(a.role)
-        return {'name': a.name, 'role': a.role, 'charter': r.charter, 'caps': sorted(r.caps), 'token': a.token,
+        return {'name': a.name, 'role': a.role, 'charter': r.charter, 'caps': sorted(h.roles.caps(a)), 'token': a.token,
                 'workflow': h.agents.wfNames().get(a.wf), 'parent': h.agents.names().get(a.parent), 'task': a.task and f't{a.task}',
                 'follows': h.log.topics(a.id), 'files': h.files.opened(a.id)}
 
@@ -90,7 +90,7 @@ class Sess:
     def leave(s, note: str = ''):
         a, out = s._me(), {'left': True}
         with s._tx() as c:
-            for t in s.hive.tasks.running(c, a.id):
+            for t in c.execute("SELECT id FROM tasks WHERE owner=? AND (state='running' OR (state='ready' AND id=?))", (a.id, a.deleg or -1)).fetchall():
                 out[f't{t.id}'] = s.hive.tasks.release(c, t.id, f'{a.name} left the hive. {note}'.strip())
             c.execute('DELETE FROM views WHERE agent=?', (a.id,))
             c.execute('DELETE FROM claims WHERE agent=?', (a.id,))
@@ -101,8 +101,9 @@ class Sess:
     def blockers(s):
         a, h = s.agent, s.hive
         out = [f"unacknowledged interrupts {', '.join(f'm{m.id}' for m in u)}: handle them, then ack them"] if (u := h.mail.urgent(a.id)) else []
-        return out + [f"merge request mr{m.id} on {m.path} waits on you: merges('mr{m.id}')" for m in h.files.mrs.involving(a.id)
-                      if a.id in h.files.mrs.waiting(m)]
+        out += [f"merge request mr{m.id} on {m.path} waits on you: merges('mr{m.id}')" for m in h.files.mrs.involving(a.id)
+                if a.id in h.files.mrs.waiting(m)]
+        return out + [f"issue i{x.id} waits on your decision: issues()" for x in h.db.q("SELECT id FROM issues WHERE holder=? AND state='open'", (a.id,))]
 
     def overview(s, scope: str = 'auto'): return s.hive.aware.overview(s._me(), scope)
 
@@ -281,7 +282,7 @@ class Sess:
 
     def cancel(s, id: str, reason: str): return s.hive.tasks.cancel(s._me(), id, reason)
 
-    def dispatch(s, id: str, name: str | None = None):
+    def dispatch(s, id: str, name: str | None = None, budget: int = 0):
         a, h = s._me(), s.hive
         h.roles.need(a, 'spawn', 'dispatch agents')
         with s._tx() as c:
@@ -290,21 +291,21 @@ class Sess:
             role = t.role or ('verifier' if t.kind == 'verify' else 'implementer')
             taken, n = set(h.agents.names().values()), name or f'{role}-t{t.id}'
             n = next(x for x in [n, *(f'{n}-{i}' for i in range(2, 1000))] if x not in taken) if not name else n
+            if budget < 0 or c.execute('UPDATE agents SET budget=budget-? WHERE id=? AND budget>=? RETURNING id', (budget, a.id, budget)).fetchone() is None:
+                raise Clash(f'you cannot give budget {budget}', 'dispatch with a budget you have (default 0)')
+            want, mine = h.roles.get(role).caps, h.roles.caps(a)
             kid = h.join(n, role, h.agents.wfNames().get(t.wf), a.name, f'dispatched for t{t.id}')
             h.tasks.reserve(c, a, t.id, kid.id)
+            c.execute('UPDATE agents SET budget=?,goal=?,deleg=?,grants=? WHERE id=?',
+                      (budget, t.about or t.title, t.id, None if want <= mine else dumps(sorted(want & mine)), kid.id))
         return {'agent': n, 'role': role, 'token': kid.token, 'task': f't{t.id}', 'prompt': s.promptFor(kid, t.id),
                 'hint': f'start an agent with this prompt; it acts in the hive as {n}'}
 
     def promptFor(s, kid, i):
         a, h = kid.agent, s.hive
+        if a.launch: return h.tree.prompt(a)
         return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token), h.tasks.show(h.tasks.get(i), full=True),
                           h.tasks.context(a, i).get('dependencies'))
-
-    def spawn(s, name: str, role: str, workflow: str | None = None, about: str = ''):
-        a, h = s._me(), s.hive
-        h.roles.need(a, 'spawn', 'start agents')
-        kid = h.join(name, role, workflow or h.agents.wfNames().get(a.wf), a.name, about)
-        return {'agent': name, 'role': role, 'token': kid.token, 'brief': brief(name, role, h.roles.get(role).charter, kid.token)}
 
     def define(s, name: str, charter: str, caps: list[str]):
         a = s._me()
@@ -317,10 +318,42 @@ class Sess:
         h.roles.need(a, 'spawn', 'change roles')
         t, ch = h.agents.named(of), h.roles.get(role).charter
         with s._tx() as c:
-            h.agents.set(c, t.id, role=role)
+            h.agents.set(c, t.id, role=role, grants=t.grants and dumps(sorted(set(J(t.grants)) & h.roles.get(role).caps)))
             h.mail.put(c, a, [t.id], f'{a.name} changed your role from {t.role} to {role}. Your charter now: {ch}', 'interrupt', 'role')
             h.log.add(c, a.id, 'agent.role', f'{t.name}: {t.role} -> {role}', f'agent:{t.name}', wf=a.wf)
         return {'agent': t.name, 'role': role}
+
+    def spawn(s, goal: str, role: str | None = None, name: str | None = None, budget: int | None = None, launch: str = 'host',
+              grants: list[str] | None = None, deliver: str = '', paths: list[str] | None = None, verify: bool | str = False):
+        return s.hive.tree.spawn(s._me(), goal, role, name, budget, launch, grants, deliver, paths, verify)
+
+    def gather(s, of: list[str] | str | None = None, secs: float = 60, any: bool = False, budget: int = 2000):
+        return s.hive.tree.gather(s._me(), of, secs, any, budget)
+
+    def tree(s, of: str | None = None, depth: int = 1, limit: int = 12, after: str | None = None):
+        return s.hive.tree.tree(s._me(), of, depth, limit, after)
+
+    def node(s, of: str | None = None, limit: int = 12): return s.hive.tree.node(s._me(), of, limit)
+
+    def walk(s, to: str = 'here'): return s.hive.tree.walk(s._me(), to)
+
+    def path(s, of: str | None = None): return s.hive.tree.lineage(s._me(), of)
+
+    def find(s, query: str = '', within: str | None = None, state: str | None = None, role: str | None = None, limit: int = 20):
+        return s.hive.tree.find(s._me(), query, within, state, role, limit)
+
+    def brief(s, of: str | None = None, budget: int = 800, depth: int = 3): return s.hive.tree.brief(s._me(), of, budget, depth)
+
+    def fund(s, of: str, amount: int): return s.hive.tree.fund(s._me(), of, amount)
+
+    def adopt(s, of: str): return s.hive.tree.adopt(s._me(), of)
+
+    def escalate(s, need: str, options: list[str] | None = None, fund: int = 0, mode: str = 'interrupt'):
+        return s.hive.tree.escalate(s._me(), need, options, fund, mode)
+
+    def decide(s, id: str, choice: str, note: str = '', fund: int | None = None): return s.hive.tree.decide(s._me(), id, choice, note, fund)
+
+    def issues(s, all: bool = False): return {'issues': s.hive.tree.issues(s._me(), not all)}
 
     def offer(s, name: str, about: str, schema: dict[str, Any] | None = None, kind: str = 'agent', argv: list[str] | None = None,
               timeout: float = 60):

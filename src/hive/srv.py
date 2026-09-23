@@ -13,7 +13,8 @@ GROUPS = {
     'msgs': 'send inbox ack ask wait share handoff follow',
     'ctx': 'put get keys drop',
     'files': 'read edit write sync diff release claim files merges propose respond abandon',
-    'tasks': 'plan tasks task take done fail verify cancel dispatch spawn define assign',
+    'tasks': 'plan tasks task take done fail verify cancel dispatch define assign',
+    'tree': 'spawn gather tree node walk path find brief fund adopt escalate decide issues',
     'tools': 'offer tools call answer result withdraw',
 }
 
@@ -68,7 +69,21 @@ DOCS = {
     'verify': 'Approve or reject work under review with evidence (verifier roles, never your own work).',
     'cancel': 'Cancel a task you created (coordinators: any); dependents are blocked.',
     'dispatch': 'Coordinators: create an agent for a ready task and get the prompt to start it with.',
-    'spawn': 'Coordinators: register an agent you are about to start and get its token and brief.',
+    'spawn': "Spawn a helper below you with a goal and a deliverable. It gets its own task under yours, a slice of your budget, capabilities "
+             "no wider than yours, and can spawn helpers of its own. launch 'host' returns a prompt for your own subagent tool, 'runner' has "
+             "Hive start it as a separate process, 'none' only registers it.",
+    'gather': 'Wait for your children (or the listed agents or tasks) to settle and collect their results; any returns at the first.',
+    'tree': 'Show the agent tree around one node (default: your cursor, else you) to a depth, with +N more for wide levels.',
+    'node': 'One node in full: goal, task, budget, keeper, children, an exact rollup of its subtree, and which descendant needs attention.',
+    'walk': "Move your view cursor: up, down, down:<name>, next, prev, root, me, or a name. Returns the node there. Moving never changes who you act as.",
+    'path': 'The lineage from the root to a node with each ancestor\'s goal: why this agent exists.',
+    'find': 'Search a subtree for agents by name, goal, status, or task, optionally by state or role.',
+    'brief': "Summarize a subtree: exact blockers first, then each child's work condensed along the tree to fit the budget.",
+    'fund': 'Give some of your budget to an agent below you.',
+    'adopt': 'Take custody of an agent below you (or any, for coordinators): its escalations come to you.',
+    'escalate': 'Ask your keeper for a decision (options, or extra budget via fund) instead of guessing; it moves up the tree if they pass it on.',
+    'decide': "Answer an issue raised to you: a choice (and optionally budget), or choice='up' to pass it to your own keeper.",
+    'issues': 'Open issues you raised or hold (all=true for every open issue).',
     'define': 'Coordinators: define a role with a charter and capabilities.',
     'assign': "Coordinators: change an agent's role; it is interrupted with its new charter.",
     'offer': "Share a tool. kind 'agent': calls come to you and you reply with answer; 'command': Hive runs argv with the arguments "
@@ -82,8 +97,8 @@ DOCS = {
 
 ARGS = {
     'agent': 'Your token from join; needed only when several agents share this connection',
-    'to': 'Agent name, role:<role>, workflow:<name>, parent, children, or *',
-    'scope': 'auto (your workflow if any), workflow, or session',
+    'to': 'Agent name, role:<role>, workflow:<name>, parent, keeper, children, siblings, subtree, ancestors, or *',
+    'scope': 'auto (reads walk your lineage, then workflow, then session), node (yours, visible to your subtree), team (your parent\'s), workflow, or session',
     'base': 'Version your change is based on; defaults to your last read',
     'thread': 'Thread name, e.g. mr3',
     're': 'Message id you are answering, e.g. m12',
@@ -97,6 +112,18 @@ ARGS = {
     'progress.state': 'active, idle, or done',
     'merges.state': 'open, resolved, abandoned, or all',
     'workflow': 'Workflow name for scoping tasks, broadcasts, and context',
+    'of': 'Agent name (or a path like coord/alice/bob); empty means your cursor, else you',
+    'spawn.budget': 'Agents the child may create below it; it costs you this plus one',
+    'spawn.role': 'The child role; defaults to yours. Its capabilities are cut down to what you have',
+    'spawn.grants': 'Narrow the child to these capabilities (a subset of yours and its role)',
+    'spawn.deliver': 'What the child must hand back, e.g. "a patch to src/x.py and passing tests"',
+    'spawn.launch': 'host, runner, or none',
+    'gather.of': 'Agent names or task ids; default all your children',
+    'gather.budget': 'Maximum length of returned results in tokens',
+    'tree.depth': 'Levels below the node to show',
+    'tree.after': 'Continue a wide level after this child',
+    'fund.amount': 'Budget to hand down',
+    'dispatch.budget': 'Budget to give the new agent out of yours (default 0)',
     'chain': 'Run the tasks in order, each after the previous',
 }
 
@@ -176,13 +203,12 @@ def build(hive, groups=tuple(GROUPS), who=None, strict=False):
     def join(name: Annotated[str, Field(description='Your agent name, unique in the hive')],
              role: Annotated[str, Field(description='coordinator, implementer, verifier, reviewer, researcher, observer, or custom')] = 'implementer',
              workflow: Annotated[str | None, Field(description=ARGS['workflow'])] = None, about: str = '',
-             parent: Annotated[str | None, Field(description='The agent that started you')] = None,
              takeover: Annotated[bool, Field(description='Reclaim your name after a restart')] = False,
              key: Annotated[str | None, Field(description='Admin key, needed over HTTP for roles that can run commands or manage agents')] = None) -> str:
         try:
             if strict and PRIV & hive.roles.get(role).caps and (not key or key != os.environ.get('HIVE_KEY')):
                 raise Denied(f'joining as {role} over HTTP needs the admin key', 'pick a role without exec, define, spawn, or manage')
-            x = hive.join(name, role, workflow, parent, about, takeover)
+            x = hive.join(name, role, workflow, None, about, takeover)
         except Err as e: raise ToolError(str(e)) from None
         who.bind(x)
         return render(x.welcome())

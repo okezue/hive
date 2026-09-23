@@ -72,9 +72,9 @@ HIVE_KEY=<secret> hive mcp --http --host 0.0.0.0 --port 8765
 
 Clients connect to `http://<host>:8765/mcp`. Over HTTP every call must carry the caller's `join` token as `agent`, and joining with a role that can run commands or manage agents (`coordinator`, or a custom role with `exec`, `define`, `spawn`, or `manage`) requires `key=<secret>`. The server refuses to listen beyond localhost unless `HIVE_KEY` is set. Put it behind TLS when it crosses an untrusted network.
 
-## Starting agents for a plan
+## Starting agents for a plan, and recursive spawning
 
-A coordinator can start each agent itself: `dispatch('t3')` returns a new agent's token and a complete prompt (charter, protocol, task, and dependency results) to hand to a subagent. Or let Hive launch processes for every ready task:
+A coordinator can start each agent itself: `dispatch('t3')` returns a new agent's token and a complete prompt (charter, protocol, task, and dependency results) to hand to a subagent. Any agent with `fork` can do the same for a piece of its own work with `spawn(goal, deliver=...)`: with `launch='host'` it gets a prompt (its lineage, goal, deliverable, budget, and token) for its harness's subagent tool, and with `launch='runner'` Hive starts the child as its own harness process. Runner children can spawn further runner children, so depth does not depend on whether the harness allows nested subagents (Claude Code caps nesting with `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`). Keep `hive run --watch` running so children spawned later are picked up. Or let Hive launch processes for every ready task:
 
 ```toml
 # .hive/config.toml

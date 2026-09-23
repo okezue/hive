@@ -16,17 +16,25 @@ class Board:
         if sc == 'workflow':
             if not a.wf: raise Bad('you are not in a workflow', "use scope='session'")
             return f'wf:{a.wf}'
-        raise Bad(f'invalid scope {sc!r}', 'auto, workflow, or session')
+        if sc == 'node': return f'n:{a.id}'
+        if sc == 'team':
+            if not a.parent: raise Bad('you have no parent, so no team frame', "use scope='node'")
+            return f'n:{a.parent}'
+        raise Bad(f'invalid scope {sc!r}', 'auto, node, team, workflow, or session')
 
     def scopes(s, a, sc):
-        x = s.scope(a, sc)
-        return [x, 'session'] if sc in (None, '', 'auto') and x != 'session' else [x]
+        if sc not in (None, '', 'auto'): return [s.scope(a, sc)]
+        return [f'n:{i}' for i in s.agents.above(a.id)] + ([f'wf:{a.wf}'] if a.wf else []) + ['session']
 
-    def label(s, sc): return f"workflow {s.agents.wfNames().get(int(sc[3:]))}" if sc.startswith('wf:') else sc
+    def label(s, sc):
+        if sc.startswith('n:'): return f"node {s.agents.names().get(int(sc[2:]))}"
+        return f"workflow {s.agents.wfNames().get(int(sc[3:]))}" if sc.startswith('wf:') else sc
 
     def put(s, a, key, val, sc=None, expect=None, tags=None):
         if not key or len(key) > 200: raise Bad('keys are 1-200 characters')
         x, enc = s.scope(a, sc), dumps(val)
+        if sc in (None, '', 'auto'):
+            x = next((f for f in s.scopes(a, sc) if s.db.one('SELECT 1 FROM ctx WHERE scope=? AND key=?', (f, key))), x)
         with s.db.tx() as c:
             r = c.execute('SELECT v,tags,agent FROM ctx WHERE scope=? AND key=?', (x, key)).fetchone()
             if expect is not None and expect != (v := r.v if r else 0):
@@ -39,11 +47,11 @@ class Board:
         return {'key': key, 'scope': s.label(x), 'version': n}
 
     def get(s, a, key, sc=None, history=0):
-        names = s.agents.names()
-        for x in s.scopes(a, sc):
+        names, chain = s.agents.names(), s.scopes(a, sc)
+        for x in chain:
             if r := s.db.one('SELECT * FROM ctx WHERE scope=? AND key=?', (x, key)):
                 out = {'key': key, 'scope': s.label(x), 'value': J(r.val), 'version': r.v, 'author': names.get(r.agent, 'hive'),
-                       'at': hms(r.ts), 'tags': J(r.tags, [])}
+                       'at': hms(r.ts), 'tags': J(r.tags, [])} | ({'inherited': True} if x.startswith('n:') and x != f'n:{a.id}' else {})
                 if history:
                     out['history'] = [{'version': h.v, 'author': names.get(h.agent, 'hive'), 'at': hms(h.ts), 'value': J(h.val)}
                                       for h in s.db.q('SELECT * FROM ctxLog WHERE scope=? AND key=? AND v<? ORDER BY v DESC LIMIT ?',
@@ -52,11 +60,14 @@ class Board:
         raise Missing(f'no context entry {key!r}', 'keys lists what exists')
 
     def keys(s, a, prefix='', sc=None, tag=None):
-        names = s.agents.names()
-        return [{'key': r.key, 'scope': s.label(x), 'version': r.v, 'author': names.get(r.agent, 'hive'), 'at': hms(r.ts),
-                 'tags': J(r.tags, []), 'preview': peek(J(r.val))}
-                for x in s.scopes(a, sc) for r in s.db.q('SELECT * FROM ctx WHERE scope=? ORDER BY key', (x,))
-                if (not prefix or r.key.startswith(prefix) or fm(r.key, prefix)) and (not tag or tag in J(r.tags, []))]
+        names, seen, out = s.agents.names(), set(), []
+        for x in s.scopes(a, sc):
+            for r in s.db.q('SELECT * FROM ctx WHERE scope=? ORDER BY key', (x,)):
+                if r.key in seen or (prefix and not (r.key.startswith(prefix) or fm(r.key, prefix))) or (tag and tag not in J(r.tags, [])): continue
+                seen.add(r.key)
+                out.append({'key': r.key, 'scope': s.label(x), 'version': r.v, 'author': names.get(r.agent, 'hive'), 'at': hms(r.ts),
+                            'tags': J(r.tags, []), 'preview': peek(J(r.val))})
+        return out
 
     def drop(s, a, key, sc=None):
         x = s.scope(a, sc)

@@ -16,13 +16,14 @@ from .sess import Sess
 from .summ import Summ, backend
 from .tasks import Tasks
 from .tools import Tools
+from .tree import Tree
 
 
 class Hive:
     def __init__(s, cfg, summ=None):
-        s.cfg, s.db, s.root = cfg, Db(cfg.db), Path(cfg.root)
+        s.cfg, s.db, s.root = cfg, Db(cfg.db, cfg.budget), Path(cfg.root)
         s.disk, s.roles, s.log = Disk(s.root), Roles(s.db), Log(s.db)
-        s.agents = Agents(s.db, s.log, s.roles, cfg.stale)
+        s.agents = Agents(s.db, s.log, s.roles, cfg.stale, cfg.budget)
         s.mail = Mail(s.db, s.log, s.agents)
         s.summ = summ or Summ(backend(cfg.summ), chunk=int(cfg.summ.get('chunk', 3000)))
         s.summ.db = s.summ.db or s.db
@@ -32,6 +33,7 @@ class Hive:
         s.tools = Tools(s.db, s.log, s.mail, s.agents, s.roles, s.root)
         s.aware = Aware(s.db, s.log, s.agents, s.tasks, s.files, s.summ, cfg.stale)
         s.notice = Notice(s.mail, s.log, s.agents, s.roles, s.files.mrs, cfg.reminder)
+        s.tree = Tree(s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, cfg)
 
     @classmethod
     def open(cls, db=None, root=None, session=None, summ=None): return cls(load(db, root, session), summ)

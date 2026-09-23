@@ -32,7 +32,7 @@ or in any MCP client config:
 {"mcpServers": {"hive": {"command": "hive", "args": ["mcp", "--agent", "alice", "--role", "implementer"]}}}
 ```
 
-An agent can also start unnamed and call `join`. Subagents that share one host connection each get a token from `join` (or from a coordinator's `dispatch`) and pass it as `agent` on every call. [docs/harness.md](docs/harness.md) has setups for each harness, including the hooks.
+An agent can also start unnamed and call `join`. Subagents that share one host connection each get a token from `join`, `spawn`, or `dispatch` and pass it as `agent` on every call. [docs/harness.md](docs/harness.md) has setups for each harness, including the hooks.
 
 ## How agents work together
 
@@ -54,6 +54,12 @@ An agent can also start unnamed and call `join`. Subagents that share one host c
 
 **Awareness.** `overview` shows everyone's role, state, status line, current task, and open files, plus active tasks, open merge requests, and recent events. `digest` summarizes what others did since the caller last asked. `watch` inspects one agent three ways: `live` follows new activity from a cursor and can block until more arrives, `window` slides back through its history page by page, and `summary` condenses any amount of activity to a token budget. Long logs are split into chunks, summarized, and the summaries summarized again until they fit, with each chunk cached so repeated summaries only pay for new activity. Summaries use an OpenAI-compatible model when an API key is present (the xAI API by default) and an extractive summarizer otherwise. `follow` subscribes to files, agents, tasks, context keys, or event kinds.
 
+**Trees of agents.** Any agent whose role has the `fork` capability can `spawn` helpers, and those helpers can spawn their own, so orchestration gets as deep as the work needs. A spawn is a delegation: the child gets a goal, a deliverable, its own task filed under the parent's current task, a slice of the parent's budget, and capabilities no wider than the parent's (a verifier's helpers cannot write files). Budgets are escrowed: a child costs one plus what it receives, and whatever it leaves unspent returns up the tree, so a subtree can never create more agents than its root was given. Depth and live children per agent are capped. Children start in the caller's own subagent tool (`launch='host'` returns a prompt and token), or as separate processes started by `hive run` (`launch='runner'`), which gives real depth even in harnesses that limit nested subagents; the runner counts only agents that are working against its concurrency cap, so parents waiting on children never starve them, and it relaunches a crashed child under the same identity before failing its task. `gather` collects children's results as a fork-join. A parent cannot finish its task while subtasks under it are unsettled, cancelling a task cancels the work below it and interrupts those agents, and a failed or abandoned delegation interrupts the parent.
+
+Lineage is permanent: `path` shows the chain from the root with every ancestor's goal, which answers why any agent exists. Custody can move: when an agent leaves, its children's keeper becomes the nearest live ancestor, open issues and unspent budget go with them, and their lineage, inherited context, and history stay intact. A blocked agent calls `escalate` with the decision it needs (and optionally a budget request); the issue goes to its keeper, who answers with `decide` or passes it further up.
+
+The tree is meant to be walked, one neighborhood at a time. `tree` renders a node and a few levels below it with `+N more` for wide levels, `node` shows one agent's goal, task, budget, children, an exact rollup of its whole subtree (agents and tasks by state, open issues, merge requests, unacknowledged interrupts, stale agents), and which descendant needs attention first. `walk` moves a personal cursor (`up`, `down`, `down:<name>`, `next`, `prev`, `root`) without changing who the agent acts as, `find` searches a subtree, and `brief` summarizes a subtree along its own shape: exact blockers first, then each child's work condensed recursively within the token budget. Context follows lineage too: `put(key, value, scope='node')` is visible to the whole subtree below the writer, `scope='team'` writes to the parent's frame for siblings to share, and reads look up the nearest frame on the way to the root before falling back to the workflow and the session. The design draws on ADK agent hierarchies, OpenAI's agents-as-tools, Claude Code's nested subagents, LangGraph subgraphs, and a design review by GPT 6 Astra; lineage-scoped memory, escrowed budgets, narrowing capabilities, custody transfer, and structured completion are what set it apart.
+
 **Shared context and tools.** `put` and `get` maintain a versioned board of findings, plans, and decisions, scoped to the session or a workflow, with compare-and-swap for co-edited entries. `offer` shares a tool: calls to an agent tool arrive in the owner's inbox and it replies with `answer`, which lets one agent expose something only it has; a command tool runs a fixed program with the arguments as JSON.
 
 **Scope.** One hive database is one session. Workflows group agents and tasks inside it, and broadcasts, context, task lists, and overviews can be limited to a workflow.
@@ -66,7 +72,8 @@ An agent can also start unnamed and call `join`. Subagents that share one host c
 | msgs | `send` `inbox` `ack` `ask` `wait` `share` `handoff` `follow` |
 | ctx | `put` `get` `keys` `drop` |
 | files | `read` `edit` `write` `sync` `diff` `release` `claim` `files` `merges` `propose` `respond` `abandon` |
-| tasks | `plan` `tasks` `task` `take` `done` `fail` `verify` `cancel` `dispatch` `spawn` `define` `assign` |
+| tasks | `plan` `tasks` `task` `take` `done` `fail` `verify` `cancel` `dispatch` `define` `assign` |
+| tree | `spawn` `gather` `tree` `node` `walk` `path` `find` `brief` `fund` `adopt` `escalate` `decide` `issues` |
 | tools | `offer` `tools` `call` `answer` `result` `withdraw` |
 
 `hive mcp --tools core,msgs,files` exposes a subset.
@@ -88,11 +95,11 @@ dev.done(t, 'added /health; tests pass')
 
 ## CLI
 
-`hive status`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run`, and `hive hook <event>` for harnesses. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
+`hive status`, `hive tree [agent] --depth 3`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run`, and `hive hook <event>` for harnesses. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
 
 ## Configuration
 
-`.hive/config.toml` holds the reminder interval, task retry limit, staleness threshold, summarizer settings, and the runner's agent commands. `HIVE_DB`, `HIVE_ROOT`, and `HIVE_SESSION` choose the hive; `HIVE_KEY` is the admin key for privileged roles over HTTP; `HIVE_AGENT` with `HIVE_ROLE`, or `HIVE_AGENT_TOKEN`, preset an agent's identity; `HIVE_LLM_API_KEY` (or `XAI_API_KEY`), `HIVE_LLM_BASE_URL`, `HIVE_LLM_MODEL`, and `HIVE_SUMMARIZER` control summaries.
+`.hive/config.toml` holds the reminder interval, task retry limit, staleness threshold, tree limits (depth, fanout, root budget), summarizer settings, and the runner's agent commands. `HIVE_DB`, `HIVE_ROOT`, and `HIVE_SESSION` choose the hive; `HIVE_KEY` is the admin key for privileged roles over HTTP; `HIVE_AGENT` with `HIVE_ROLE`, or `HIVE_AGENT_TOKEN`, preset an agent's identity; `HIVE_LLM_API_KEY` (or `XAI_API_KEY`), `HIVE_LLM_BASE_URL`, `HIVE_LLM_MODEL`, and `HIVE_SUMMARIZER` control summaries.
 
 ## Development
 
@@ -101,7 +108,7 @@ uv venv && uv pip install -e '.[dev]'
 .venv/bin/pytest -q
 ```
 
-The suite covers the merge algorithm (including agreement with `git merge-file`), co-editing and merge requests, task graphs and verification, messaging, summaries, the MCP server in process and over stdio, hooks, the runner, and several processes editing one file and racing for tasks.
+The suite covers recursive spawning three levels deep through the runner, the merge algorithm (including agreement with `git merge-file`), co-editing and merge requests, task graphs and verification, messaging, summaries, the MCP server in process and over stdio, hooks, the runner, and several processes editing one file and racing for tasks.
 
 ## License
 

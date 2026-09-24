@@ -15,24 +15,37 @@ Python 3.11 or newer.
 
 ## Start
 
-```sh
-cd your-project
-hive init          # creates .hive/ and prints an MCP config entry
-```
-
-Give each agent the MCP server, naming the agent and its role:
+Plug Hive into the agent CLIs you use, once:
 
 ```sh
-claude mcp add hive -- hive mcp --agent alice --role implementer
+hive install              # every harness on your PATH: claude, codex, grok, gemini, cursor, opencode
+hive install grok codex   # or name them; --project writes the project's config files instead of your user's
+hive doctor               # checks each one: config, hooks, a handshake with the server, and the harness's own mcp list
 ```
 
-or in any MCP client config:
+`hive install` adds the Hive MCP server to each harness's own config and, where the harness supports them, the hooks. It leaves everything else in those files as it was, keeps a backup of user-level files it changes, and refuses to touch a file it cannot parse. From then on any session of those harnesses can use Hive: an agent calls `join` and the project's hive is created on first use (in the git root, with its own `.gitignore`).
 
-```json
-{"mcpServers": {"hive": {"command": "hive", "args": ["mcp", "--agent", "alice", "--role", "implementer"]}}}
+Or start agents from Hive, in any harness, all in the same hive:
+
+```sh
+hive start claude                         # an interactive Claude Code session that is already a member of this hive
+hive start codex --role verifier          # a Codex session next to it, as a verifier
+hive start grok -p "tidy the changelog"   # a headless Grok run that prints its output and leaves when done
+hive start gemini --task t3               # a Gemini session working on task t3
+hive ls                                   # every hive on this machine, with who is in it and in which harness
 ```
 
-An agent can also start unnamed and call `join`. Subagents that share one host connection each get a token from `join`, `spawn`, or `dispatch` and pass it as `agent` on every call. [docs/harness.md](docs/harness.md) has setups for each harness, including the hooks.
+[docs/harness.md](docs/harness.md) has the details for each harness, and manual setups for MCP clients Hive does not know.
+
+## One hive across harnesses
+
+A project has one hive, and every agent in it shares it whatever it runs in: sessions you start yourself that call `join`, sessions started with `hive start`, and agents the runner launches. Hive keeps a registry of hives and agent processes in `~/.hive/hives.db`, so `hive ls` shows hives started from inside any harness, and `hive -H <name|number> status` (or any other command) reaches one from anywhere.
+
+Agents are identified by the harness process they run in. When Hive starts a harness it records that process; when a session joins by itself, its MCP server records the harness it runs under. The MCP server and the hooks then find their agent by looking up their own process ancestry. This works even for harnesses that strip environment variables from MCP servers and hooks, as Gemini and Codex do.
+
+Work can be placed in a particular harness: a plan task or a `spawn` takes `harness="codex"`, a runner role takes `harness = "claude"` in `.hive/config.toml`, and `hive run --harness gemini` sets the default. Without any, `hive run` uses the first harness it finds installed. Your own agent CLI can be added as a harness under `[harness.<name>]` with a headless `run` command and an interactive `chat` command.
+
+**Sharing MCP servers.** `hive mount <name> -- <command> [args]` (or `--url` for HTTP servers) makes an MCP server's tools available to every agent in the hive as `<name>.<tool>`, called through Hive's `call`, so a Codex agent can use a server that only your Grok config has. `hive mount --from grok` imports the servers from a harness's config, and agents with the `exec` capability can `mount` servers themselves. Each agent's Hive server keeps its own live connection to a mounted server and reconnects if it dies; mount an HTTP server when every agent should share one instance. Environment values written as `${VAR}` are read from each caller when it connects, so secrets stay out of the hive.
 
 ## How agents work together
 
@@ -107,7 +120,7 @@ dev.done(t, 'added /health; tests pass')
 
 ## CLI
 
-`hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run`, `hive faults`, `hive retry [task]`, and `hive hook <event>` for harnesses. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
+`hive install|uninstall|doctor [harness]`, `hive start <harness> [prompt]`, `hive ls`, `hive mount [name] [-- command]`, `hive unmount <name>`, `hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run [--harness h]`, `hive faults`, `hive retry [task]`, and `hive hook <event>` for harnesses. Commands act on the hive of the current project, or the one `-H <name|number|path>` picks from `hive ls`. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
 
 ## Configuration
 

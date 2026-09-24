@@ -29,6 +29,9 @@ def testInitStatusSendPlan(root, capsys, monkeypatch):
 
 
 def testErrorsExitTwo(root, capsys):
+    code, o = cli(root, 'status', capsys=capsys)
+    assert code == 2 and 'no hive at' in o.err and not (root/'.hive').exists()
+    cli(root, 'mcp-config', capsys=capsys)
     code, o = cli(root, 'history', 'ghost', capsys=capsys)
     assert code == 2 and 'ghost' in o.err
 

@@ -1,4 +1,6 @@
 import inspect, json, os, sqlite3, threading
+from contextlib import suppress
+from pathlib import Path
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
@@ -6,18 +8,9 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .err import Anon, Denied, Err, Missing
+from .reg import host, mine, reg
 from .sess import Sess
-
-GROUPS = {
-    'core': 'me progress leave overview digest watch roles',
-    'msgs': 'send inbox ack ask wait share handoff follow',
-    'ctx': 'put get keys drop',
-    'files': 'read edit write sync diff release claim files merges propose respond abandon',
-    'tasks': 'plan tasks task take done fail verify cancel dispatch define assign retry faults',
-    'tree': 'spawn gather tree node walk path find brief fund adopt escalate decide issues',
-    'know': 'note findings material compose gist stale harvest distill recall weigh retire',
-    'tools': 'offer tools call answer result withdraw',
-}
+from .util import GROUPS
 
 INFO = ('Hive connects you with the other agents in this session. Start with join (or me if your identity is preset) to learn your '
         'role, token, and who else is here. Responses may carry interrupts (handle first, then ack), messages, a queued count, and '
@@ -108,8 +101,12 @@ DOCS = {
     'assign': "Coordinators: change an agent's role; it is interrupted with its new charter.",
     'offer': "Share a tool. kind 'agent': calls come to you and you reply with answer; 'command': Hive runs argv with the arguments "
              'as JSON on stdin.',
-    'tools': 'Tools other agents share, with owners and schemas.',
-    'call': 'Call a shared tool; waits up to wait seconds, else returns a call id for result.',
+    'tools': 'Tools shared in the hive (by agents, as commands, or from mounted MCP servers) with owners and schemas, and the mounted servers. '
+             'query filters by words in the name or description.',
+    'call': 'Call a shared tool, including the tools of mounted MCP servers (server.tool); waits up to wait seconds, else returns a call id for result.',
+    'mount': 'Mount an MCP server (a command, or a url for HTTP servers) so every agent in the hive can call its tools as name.tool, whatever '
+             'harness they run in. Mounting again refreshes its tools.',
+    'unmount': 'Remove a mounted MCP server and its tools.',
     'answer': 'Reply to a call of a tool you share.',
     'result': 'Check or wait for the result of a shared tool call.',
     'withdraw': 'Stop sharing a tool.',
@@ -155,11 +152,35 @@ ARGS = {
     'weigh.stance': 'support or against',
     'recall.state': 'proposed, established, or contested',
     'dispatch.budget': 'Budget to give the new agent out of yours (default 0)',
+    'harness': 'Agent CLI to run it in (claude, codex, grok, gemini, cursor, opencode); the runner starts it there, in this same hive',
+    'mount.env': 'Environment for the server; ${VAR} is read from each caller at connection time, so secrets stay out of the hive',
+    'mount.timeout': 'Seconds a call may take',
     'chain': 'Run the tasks in order, each after the previous',
 }
 
 
 PRIV = {'exec', 'define', 'spawn', 'manage', 'compose', 'distill'}
+
+
+class Lazy:
+    def __init__(s, f): s.__dict__.update(f=f, h=None, lock=threading.Lock())
+
+    def __getattr__(s, k):
+        if s.h is None:
+            with s.lock:
+                if s.h is None: s.__dict__['h'] = s.f()
+        return getattr(s.h, k)
+
+
+def claim(hive, x):
+    with suppress(Exception):
+        p, n = host()
+        if not p or not (r := reg()): return
+        if (o := r.holder(p)) and o.token != x.token and o.db == str(hive.cfg.db):
+            with suppress(Anon, Missing):
+                if hive.agents.byToken(o.token).state != 'left': return
+        r.bind(p, hive.cfg.db, hive.root, x.name, x.token, n)
+        with hive.db.tx() as c: hive.agents.set(c, x.id, harness=n)
 
 
 class Who:
@@ -179,6 +200,9 @@ class Who:
             except Missing: a = None
             s.default = a.id if a and a.state != 'left' else h.join(n, os.environ.get('HIVE_ROLE', 'implementer'),
                                                                     os.environ.get('HIVE_WORKFLOW') or None).id
+        elif not s.joined and (b := mine()) and Path(b.db) == Path(h.cfg.db):
+            with suppress(Anon, Missing):
+                if (a := h.agents.byToken(b.token)).state != 'left': s.default = a.id
         s.env = True
 
     def __call__(s, agent):
@@ -224,13 +248,15 @@ def wrap(name, who):
         except Err as e:
             n = x.notices()
             raise ToolError(str(e) + (f'\n\n{render({}, n)}' if n else '')) from None
+        if name == 'leave':
+            with suppress(Exception): reg().unbind(token=x.token)
         return render(res, x.notices())
 
     tool.__name__, tool.__doc__, tool.__signature__ = name, DOCS[name], inspect.Signature(ps, return_annotation=str)
     return tool
 
 
-def build(hive, groups=tuple(GROUPS), who=None, strict=False):
+def build(hive, groups=tuple(GROUPS), who=None, strict=False, claims=False):
     srv, who = MCPServer('hive', instructions=INFO), who or Who(hive, strict)
 
     def join(name: Annotated[str, Field(description='Your agent name, unique in the hive')],
@@ -244,6 +270,7 @@ def build(hive, groups=tuple(GROUPS), who=None, strict=False):
             x = hive.join(name, role, workflow, None, about, takeover)
         except Err as e: raise ToolError(str(e)) from None
         who.bind(x)
+        if claims and len(who.joined) == 1 and not (os.environ.get('HIVE_AGENT_TOKEN') or os.environ.get('HIVE_AGENT')): claim(hive, x)
         return render(x.welcome())
 
     srv.tool(description=DOCS['join'], structured_output=False)(join)

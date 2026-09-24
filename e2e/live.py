@@ -201,7 +201,73 @@ def recover(c):
     h.close()
 
 
-SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover}
+CALC = """from mcp.server.mcpserver import MCPServer
+s = MCPServer('calc')
+
+
+@s.tool()
+def add(a: int, b: int) -> int:
+    \"\"\"Add two integers.\"\"\"
+    return a + b
+
+
+s.run('stdio')
+"""
+
+
+def plug(c):
+    d = BASE/'plug'
+    shutil.rmtree(d, ignore_errors=True)
+    (d/'out').mkdir(parents=True)
+    (d/'notes.md').write_text('# notes\n')
+    (d/'calc.py').write_text(CALC)
+    subprocess.run(['git', 'init', '-q'], cwd=d, check=True)
+    e = env(d, HIVE_HOME=str(d/'home'))
+    bare = {k: v for k, v in e.items() if not k.startswith('HIVE_') or k in ('HIVE_HOME', 'HIVE_GLOBAL')}
+    sh = lambda *a, cwd=d, secs=300: subprocess.run([HIVE, *a], cwd=cwd, env=e, capture_output=True, text=True, timeout=secs)
+
+    def timed(who, argv, **kw):
+        t = time.time()
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=1600, **kw)
+        (d/'out'/f'{who}.txt').write_text(r.stdout + '\n' + r.stderr)
+        print(f'  {who} finished in {time.time()-t:.0f}s (exit {r.returncode})', flush=True)
+        return r
+
+    r = sh('install', 'grok', '--project')
+    c(r.returncode == 0 and 'grok: ok' in r.stdout and 'answers with' in r.stdout, 'hive install grok --project wires the MCP server and hooks, and grok lists it')
+    r = sh('mount', 'calc', '--', sys.executable, str(d/'calc.py'))
+    c(r.returncode == 0 and 'calc.add' in r.stdout, 'hive mount shares an MCP server with the whole hive')
+    with open(d/'.hive'/'config.toml', 'a') as f: f.write(f"\n[harness.grok]\nrun = {json.dumps(grok(40, file='{promptFile}'))}\n")
+    timed('alice', [HIVE, 'start', 'grok', '-p', '--name', 'alice',
+                    'Use the hive MCP tools. Call hive tools to see what is shared, then run calc.add with a=19 and b=23 through hive call. With your own '
+                    'file editing tool (not hive), append a line "sum: <the result>" to notes.md. Record what you did with hive note. Reply with the sum.'],
+          cwd=d, env=e)
+    timed('bob', [x.replace('{root}', str(d)) for x in grok(30, 'This folder uses Hive, an MCP server named hive. First call hive join with name "bob" '
+                                                               'and role "implementer". Then, with your own file editing tool (not hive), append the line "bob was '
+                                                               'here" to notes.md. Record it with hive note, then call hive leave. Reply DONE.')], cwd=d, env=bare)
+    (d/'plan.json').write_text(json.dumps([{'title': 'Append the line "runner was here" to notes.md using hive read and hive edit', 'harness': 'grok'}]))
+    sh('plan', 'plan.json')
+    timed('runner', [HIVE, 'run', '--timeout', '1500'], cwd=d, env=e)
+    h = Hive.open(d/'.hive'/'hive.db', d)
+    ag, notes = {a.name: a for a in h.agents.all(gone=True)}, (d/'notes.md').read_text()
+    calls = h.db.q("SELECT * FROM calls WHERE tool='calc.add'")
+    syncs = {r.agent for r in h.db.q("SELECT agent FROM vers WHERE path='notes.md' AND origin='sync'")}
+    alice, bob, t1 = ag.get('alice'), ag.get('bob'), h.tasks.get(1)
+    o = t1.owner and h.agents.get(t1.owner)
+    c(alice and alice.harness == 'grok' and alice.state == 'left', 'hive start ran grok as alice in this hive, and she left when it exited')
+    c(alice and calls and calls[0].src == alice.id and calls[0].state == 'done' and json.loads(calls[0].result) == '42' and 'sum: 42' in notes,
+      'alice called the mounted calc server through hive and wrote its answer, 42')
+    c(alice and alice.id in syncs, "alice's edit with grok's own file tool was synced into the hive by the hooks")
+    c(bob and bob.harness == 'grok', 'a plain grok session that joined on its own was recorded as running in grok')
+    c(bob and bob.id in syncs and 'bob was here' in notes, "bob's native edit was synced by hooks that found him through the machine registry")
+    c(t1.state == 'done' and 'runner was here' in notes and o and o.harness == 'grok', 'hive run started the grok-pinned task in grok and it finished')
+    ls = json.loads(sh('ls', '--json', cwd='/').stdout or '[]')
+    c(any(x['root'] == str(d.resolve()) for x in ls), 'hive ls, run from another folder, lists this hive')
+    c(h.db.one('SELECT COUNT(DISTINCT agent) n FROM findings WHERE agent IN (?,?)', (alice and alice.id, bob and bob.id)).n == 2,
+      'alice and bob recorded findings under their own names')
+
+
+SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover, 'plug': plug}
 
 
 def main():
@@ -212,6 +278,7 @@ def main():
     a = p.parse_args()
     if bad := set(a.only) - set(SCENARIOS): p.error(f"unknown scenarios: {' '.join(sorted(bad))}")
     MODEL = a.model
+    os.environ.setdefault('HIVE_HOME', str(BASE/'home'))
     report = {}
     for n in a.only or SCENARIOS:
         print(f'== {n}', flush=True)

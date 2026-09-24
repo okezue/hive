@@ -11,7 +11,9 @@ def root(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def lib(monkeypatch, tmp_path): monkeypatch.setenv('HIVE_GLOBAL', str(tmp_path/'global'/'insights.db'))
+def lib(monkeypatch, tmp_path):
+    monkeypatch.setenv('HIVE_GLOBAL', str(tmp_path/'global'/'insights.db'))
+    monkeypatch.setenv('HIVE_HOME', str(tmp_path/'home'))
 
 
 @pytest.fixture

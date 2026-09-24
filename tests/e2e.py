@@ -180,12 +180,12 @@ def testManyProcessesShareOneSessionThroughMcp(root, tmp_path, n):
     (root/'notes.txt').write_text(''.join(f'SLOT{i}: todo\n' for i in range(n)))
     script = tmp_path/'writer.py'
     script.write_text(textwrap.dedent('''
-        import asyncio, json, sys
+        import asyncio, json, os, sys
         from mcp.client import Client
         from mcp.client.stdio import StdioServerParameters
         db, root, i = sys.argv[1:4]
         async def main():
-            p = StdioServerParameters(command=sys.executable, args=['-m', 'hive', '--db', db, '--root', root, 'mcp', '--agent', f'w{i}'])
+            p = StdioServerParameters(command=sys.executable, args=['-m', 'hive', '--db', db, '--root', root, 'mcp', '--agent', f'w{i}'], env=dict(os.environ))
             async with Client(p) as c:
                 await c.call_tool('read', {'path': 'notes.txt'})
                 r = await c.call_tool('edit', {'path': 'notes.txt', 'edits': [{'old': f'SLOT{i}: todo', 'new': f'SLOT{i}: w{i}'}]})

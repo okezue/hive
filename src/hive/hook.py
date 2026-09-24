@@ -1,18 +1,17 @@
 import json, os, re, sys
 from contextlib import suppress
 
-from .core import Hive
-from .err import Err, Missing
-from .sess import Sess
-from .util import clip, line
+from .err import Anon, Err, Missing
+from .reg import mine, reg
+from .util import EVENTS, clip, line
 
 READS = {'read', 'read_file', 'view', 'notebookread', 'open_file'}
 EDITS = {'edit', 'write', 'multiedit', 'notebookedit', 'search_replace', 'edit_file', 'create_file', 'str_replace_editor',
          'str_replace_based_edit_tool', 'apply_patch', 'write_file', 'replace'}
 KEYS = ('file_path', 'path', 'target_file', 'notebook_path', 'filePath', 'filename')
 PATCH = re.compile(r'^(?:\*\*\* (?:Update|Add) File: (.+)|\+\+\+ b/(.+))$', re.M)
-EVENTS = ('pre', 'post', 'prompt', 'stop', 'start', 'end')
-NAMES = {'pre': 'PreToolUse', 'post': 'PostToolUse', 'prompt': 'UserPromptSubmit', 'stop': 'Stop', 'start': 'SessionStart'}
+NAMES = {'pre': 'PreToolUse', 'post': 'PostToolUse', 'prompt': 'UserPromptSubmit', 'stop': 'Stop', 'start': 'SessionStart', 'end': 'SessionEnd'}
+GEM = {'pre': 'BeforeTool', 'post': 'AfterTool', 'prompt': 'BeforeAgent', 'stop': 'AfterAgent', 'start': 'SessionStart', 'end': 'SessionEnd'}
 
 
 class Ev:
@@ -26,7 +25,9 @@ class Ev:
     def sub(e): return bool(e.raw.get('subagentType') or e.raw.get('subagent_type'))
 
     @property
-    def hive(e): return e.tool.lower().startswith(('mcp__hive__', 'hive__'))
+    def hive(e):
+        m = e.raw.get('mcp_context') if isinstance(e.raw.get('mcp_context'), dict) else {}
+        return e.tool.lower().startswith(('mcp__hive__', 'hive__', 'mcp_hive_')) or (m.get('server_name') or m.get('serverName')) == 'hive'
 
     @property
     def edit(e): return e.tool.split('__')[-1].lower() in EDITS
@@ -48,8 +49,9 @@ class Ev:
                     e.tool)
 
 
-def who(hive):
-    if t := os.environ.get('HIVE_AGENT_TOKEN'): return hive.sess(t)
+def who(hive, tok=None):
+    from .sess import Sess
+    if t := os.environ.get('HIVE_AGENT_TOKEN') or tok: return hive.sess(t)
     if not (n := os.environ.get('HIVE_AGENT')): return None
     try: a = hive.agents.named(n)
     except Missing: a = None
@@ -84,9 +86,13 @@ def synced(p, r):
     return '\n'.join(out), st == 'conflict'
 
 
-def emit(fmt, ev, ctx=None, deny=None, block=None):
+def emit(fmt, kind, ctx=None, deny=None, block=None):
     if fmt == 'text': return deny or block or ctx or ''
-    spec, out = {'hookEventName': ev}, {}
+    if fmt == 'gemini':
+        if deny: return json.dumps({'decision': 'deny', 'reason': deny}, ensure_ascii=False)
+        if block and kind == 'stop': return json.dumps({'decision': 'block', 'reason': clip(block, 9500)}, ensure_ascii=False)
+        return json.dumps({'hookSpecificOutput': {'hookEventName': GEM[kind], 'additionalContext': clip(ctx or block, 9500)}}, ensure_ascii=False)
+    spec, out = {'hookEventName': NAMES[kind]}, {}
     if deny: spec |= {'permissionDecision': 'deny', 'permissionDecisionReason': deny}
     elif ctx and not block: spec['additionalContext'] = clip(ctx, 9500)
     if block: out |= {'decision': 'block', 'reason': clip(block, 9500)}
@@ -112,13 +118,13 @@ def handle(kind, raw, hive, x, fmt='claude'):
         notes = []
         for p in mine():
             r = x.prepare(p)
-            if d := r.get('denied'): return emit(fmt, NAMES[kind], deny=f'Hive: {d}. Ask an implementer to make the change.')
+            if d := r.get('denied'): return emit(fmt, kind, deny=f'Hive: {d}. Ask an implementer to make the change.')
             if b := r.get('blocked'):
-                return emit(fmt, NAMES[kind], deny=f"Hive: your earlier change to {r['path']} waits in merge request {b}. Settle it first "
+                return emit(fmt, kind, deny=f"Hive: your earlier change to {r['path']} waits in merge request {b}. Settle it first "
                                                    f"(merges('{b}'), talk to the other author, then propose or abandon).")
             notes += [f"Hive: {r['path']} changed since you last looked: v{c['version']} by {c['author']} ({c['changed']}). String "
                       'replacements still apply to the current file; re-read it before rewriting the whole file.' for c in r.get('changedSince', [])]
-        return emit(fmt, NAMES[kind], '\n'.join(notes)) if notes else None
+        return emit(fmt, kind, '\n'.join(notes)) if notes else None
     if kind == 'post':
         notes, bad = [], False
         if not e.hive: x.record(e.says())
@@ -132,16 +138,16 @@ def handle(kind, raw, hive, x, fmt='claude'):
         if n := text(x.notices()):
             notes.append(n)
             bad |= 'INTERRUPT' in n
-        return emit(fmt, NAMES[kind], '\n'.join(notes), block='\n'.join(notes) if bad else None) if notes else None
+        return emit(fmt, kind, '\n'.join(notes), block='\n'.join(notes) if bad else None) if notes else None
     if kind in ('prompt', 'start'):
         if kind == 'start':
             w = x.welcome()
             t = w['brief'] + '\n\nOthers here: ' + json.dumps(w['others'], ensure_ascii=False)
         else: t = text(x.notices())
-        return emit(fmt, NAMES[kind], t) if t else None
+        return emit(fmt, kind, t) if t else None
     if kind == 'stop':
         if e.raw.get('reason') not in (None, 'end_turn'): return None
-        if bs := x.blockers(): return emit(fmt, NAMES[kind], block='Hive: before you stop, ' + '; '.join(bs))
+        if bs := x.blockers(): return emit(fmt, kind, block='Hive: before you stop, ' + '; '.join(bs))
         x.idle()
         return None
     x.leave('session ended')
@@ -150,10 +156,23 @@ def handle(kind, raw, hive, x, fmt='claude'):
 
 def main(kind, fmt='claude', hive=None):
     try:
-        raw = sys.stdin.read()
-        if not hive and not (os.environ.get('HIVE_AGENT_TOKEN') or os.environ.get('HIVE_AGENT')): return 0
-        hive = hive or Hive.open()
-        if out := handle(kind, json.loads(raw) if raw.strip() else {}, hive, who(hive), fmt): print(out)
+        raw, b = sys.stdin.read(), None
+        if not hive:
+            env = os.environ.get('HIVE_AGENT_TOKEN') or os.environ.get('HIVE_AGENT')
+            if not env and not (b := mine()): return 0
+            from .cfg import load, locate
+            from .core import Hive
+            if not (c := locate() if env else load(b.db, b.root)).db.exists(): return 0
+            hive = Hive(c)
+        try: x = who(hive, b and b.token)
+        except (Anon, Missing):
+            if not b: raise
+            x = None
+        if x is None or x.agent.state == 'left':
+            if b: reg().unbind(token=b.token)
+            return 0
+        if out := handle(kind, json.loads(raw) if raw.strip() else {}, hive, x, fmt): print(out)
+        if kind == 'end' and x.agent.state == 'left': reg().unbind(token=x.token)
     except Exception as err:
         print(f'hive hook {kind}: {err}', file=sys.stderr)
     return 0

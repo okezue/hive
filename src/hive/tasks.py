@@ -31,7 +31,7 @@ class Tasks:
         names = s.agents.names() if names is None else names
         out = {'id': f't{t.id}', 'title': t.title, 'state': t.state, 'role': t.role, 'kind': t.kind, 'owner': names.get(t.owner),
                'after': [f't{d}' for d in (s.deps(t.id) if after is None else after)]}
-        for k, v in (('prio', t.prio), ('verify', t.verify), ('checks', t.checks and f't{t.checks}'), ('paths', t.paths)):
+        for k, v in (('prio', t.prio), ('verify', t.verify), ('checks', t.checks and f't{t.checks}'), ('paths', t.paths), ('harness', t.get('harness'))):
             if v: out[k] = v
         if t.wf: out['workflow'] = s.agents.wfNames().get(t.wf)
         if t.get('node'): out['node'] = names.get(t.node)
@@ -85,11 +85,11 @@ class Tasks:
                 state = 'blocked' if any(x in DEAD for x in st) else 'ready' if all(x == 'done' for x in st) else 'pending'
                 owner = s.agents.named(sp['assignee']).id if sp.get('assignee') else None
                 paths = [sp['paths']] if isinstance(sp.get('paths'), str) else sp.get('paths') or []
-                made[k] = i = c.execute('INSERT INTO tasks(wf,title,about,role,kind,state,prio,creator,owner,parent,verify,paths,ts) '
-                                        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                made[k] = i = c.execute('INSERT INTO tasks(wf,title,about,role,kind,state,prio,creator,owner,parent,verify,paths,ts,harness) '
+                                        'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                         (w, sp['title'].strip(), sp.get('about') or '', sp.get('role'), sp.get('kind') or 'work', state,
                                          int(sp.get('prio') or 0), a.id, owner, pid('t', sp['parent'], 'task') if sp.get('parent') else None,
-                                         sp['verify'], dumps(paths), now())).lastrowid
+                                         sp['verify'], dumps(paths), now(), sp.get('harness') or '')).lastrowid
                 c.executemany('INSERT OR IGNORE INTO deps VALUES(?,?)', [(i, d) for d in ds])
                 s.log.sub(c, a.id, f'task:t{i}')
                 s.log.add(c, a.id, 'task.created', f"t{i} [{sp.get('role') or 'any role'}] {line(sp['title'], 80)}"
@@ -133,15 +133,15 @@ class Tasks:
             t = s.get(t.id, c)
         return {'task': s.show(t, full=True)} | s.depCtx(t, 2000)
 
-    def delegate(s, c, a, kid, goal, deliver, role, paths, verify):
+    def delegate(s, c, a, kid, goal, deliver, role, paths, verify, harness=None):
         v = 'verifier' if verify is True else verify or None
         if v: s.roles.get(v)
         run = [r.id for r in s.running(c, a.id)]
         own = a.deleg and c.execute("SELECT id FROM tasks WHERE id=? AND state NOT IN ('done','failed','cancelled','blocked')", (a.deleg,)).fetchone()
         par = a.task if a.task in run else run[0] if run else own and own.id
-        i = c.execute("INSERT INTO tasks(wf,title,about,role,kind,state,creator,owner,parent,verify,paths,deliver,ts) "
-                      "VALUES(?,?,?,?,'work','ready',?,?,?,?,?,?,?)",
-                      (a.wf, line(goal, 80), goal, role, a.id, kid.id, par, v, dumps(paths or []), deliver or '', now())).lastrowid
+        i = c.execute("INSERT INTO tasks(wf,title,about,role,kind,state,creator,owner,parent,verify,paths,deliver,ts,harness) "
+                      "VALUES(?,?,?,?,'work','ready',?,?,?,?,?,?,?,?)",
+                      (a.wf, line(goal, 80), goal, role, a.id, kid.id, par, v, dumps(paths or []), deliver or '', now(), harness or '')).lastrowid
         s.log.sub(c, a.id, f'task:t{i}')
         s.log.add(c, a.id, 'task.created', f't{i} delegated to {kid.name}' + (f' under t{par}' if par else '') + f': {line(goal, 80)}',
                   f'task:t{i}', wf=a.wf)

@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import IO
 
 from .err import Err
-from .fault import ENV, FIX, FREE, HARD, RESUME, SAY, alive, backoff, clean, classify, dur, label, same, stamp, tag, tail
+from .fault import ENV, FIX, FREE, HARD, RESUME, SAY, backoff, clean, classify, dur, label, tag, tail
+from .harness import H, found, install, installed, profile
 from .prompt import mcp
+from .reg import alive, reg, same, stamp
 from .tasks import SETTLED
 from .util import J, clip, dumps, now, sha
 
@@ -62,10 +64,13 @@ class Adopt:
 
 class Runner:
     def __init__(s, hive, cmds, cap=3, poll=1., op=None, say=None, env=None, watch=False, budget=4, **pol):
-        if not cmds: raise ValueError('the runner needs a command, by role or default')
         if bad := set(pol)-set(POL): raise TypeError(f"unknown runner settings: {', '.join(sorted(bad))}")
-        s.hive, s.cap, s.poll, s.env, s.watch, s.budget = hive, max(1, cap), poll, env or {}, watch, budget
-        s.cmds = {k: [list(x) for x in v] if v and isinstance(v[0], list | tuple) else [list(v)] for k, v in cmds.items()}
+        s.hive, s.cap, s.poll, s.env, s.watch, s.budget, s.hn, s.ok, s.warned = hive, max(1, cap), poll, env or {}, watch, budget, {}, set(), set()
+        if not cmds and (f := found(hive.cfg)):
+            cmds = {'default': f[0]}
+            (say or (lambda t: None))(f'no runner command is configured, so agents run in {f[0]}')
+        if not cmds: raise ValueError('the runner needs a command or harness, by role or default, and no agent CLI was found on PATH')
+        s.cmds = {k: [s.entry(x) for x in v] if isinstance(v, tuple) or v and isinstance(v[0], list | tuple) else [s.entry(v)] for k, v in cmds.items()}
         s.pol = {k: pol.get(k, hive.cfg.runner.get(k, v)) for k, v in POL.items()}
         s.calm = 12*float(s.pol['backoff'][0])
         s.keys, got = {}, {}
@@ -81,11 +86,24 @@ class Runner:
     @classmethod
     def fromCfg(cls, hive, **kw):
         r = hive.cfg.runner
-        cmds = {k: [list(v['command']), *map(list, v.get('fallback', []))] for k, v in r.get('roles', {}).items() if v.get('command')}
+        cmds = {k: (v.get('harness') or list(v['command']), *v.get('fallback', [])) for k, v in r.get('roles', {}).items() if v.get('command') or v.get('harness')}
         kw.setdefault('budget', int(r.get('budget', 4)))
         return cls(hive, kw.pop('cmds', None) or cmds, int(kw.pop('cap', None) or r.get('max', 3)), float(kw.pop('poll', r.get('poll', 1.))), **kw)
 
-    def cmd(s, t): return s.cmds.get(t.role or ('verifier' if t.kind == 'verify' else 'implementer')) or s.cmds.get('default')
+    def entry(s, x):
+        if not isinstance(x, str): return list(x)
+        s.hn[tuple(c := list(profile(x, s.hive.cfg).get('run') or []))] = x
+        if not c: raise ValueError(f'harness {x} has no headless command')
+        return c
+
+    def cmd(s, t):
+        if h := t.get('harness'):
+            try: return s.cmds.setdefault(f'@{h}', [s.entry(h)])
+            except (Err, ValueError) as e:
+                if h not in s.warned: s.say(f'cannot run t{t.id} in {h}: {e}')
+                s.warned.add(h)
+                return None
+        return s.cmds.get(t.role or ('verifier' if t.kind == 'verify' else 'implementer')) or s.cmds.get('default')
 
     def key(s, cm): return s.keys.get(tuple(cm)) or label(cm)
 
@@ -194,7 +212,13 @@ class Runner:
         if g['paused']: g['probe'] = now()+s.pol['probe']
         pf, mf, lf = s.dir/f'{n}.prompt.md', s.dir/f'{n}.mcp.json', s.dir/f'{n}.log'
         pf.write_text(prompt)
-        env = {'HIVE_DB': str(h.cfg.db), 'HIVE_ROOT': str(h.root), 'HIVE_AGENT_TOKEN': tok, 'HIVE_AGENT': n, 'HIVE_TASK': f't{t.id}'}
+        hn = s.hn.get(tuple(cmd), '')
+        if hn in H and hn not in s.ok:
+            if not installed(hn, h.root):
+                for f, what in install(hn, 'user', h.root): s.say(f'{what} {f} so {hn} agents can reach the hive')
+            s.ok.add(hn)
+        env = {'HIVE_DB': str(h.cfg.db), 'HIVE_ROOT': str(h.root), 'HIVE_AGENT_TOKEN': tok, 'HIVE_AGENT': n, 'HIVE_TASK': f't{t.id}', 'HIVE_ROLE': role} | \
+            ({'HIVE_HARNESS': hn} if hn else {})
         mf.write_text(mcp([sys.executable, '-m', 'hive', 'mcp'], env))
         vals = {'prompt': prompt, 'promptFile': str(pf), 'task': f't{t.id}', 'agent': n, 'token': tok, 'role': role,
                 'db': env['HIVE_DB'], 'root': env['HIVE_ROOT'], 'mcp': str(mf)}
@@ -202,15 +226,18 @@ class Runner:
         log = open(lf, 'a')
         log.write(f"{SEP}{time.strftime('%Y-%m-%d %H:%M:%S')} ({k}) ---\n")
         log.flush()
+        t0 = now()
         try: p = subprocess.Popen(argv, cwd=h.root, env={**os.environ, **s.env, **env}, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                   start_new_session=True)
         except (OSError, ValueError) as e:
             s.settle(Job(n, a.id, t.id, None, log, None, now(), k, 'setup', f'could not start {argv[0]}: {e}'), None)
             raise Err(f'could not start {argv[0]}: {e}') from None
+        at = stamp(p.pid)
         with h.db.tx() as c:
             if a.launch and not b: c.execute('UPDATE tasks SET tries=tries+1 WHERE id=?', (t.id,))
-            h.agents.set(c, a.id, state='active', pid=p.pid, pidAt=stamp(p.pid))
-        s.jobs[a.id] = Job(n, a.id, t.id, p, log, lf, now(), k, skip=frozenset(x.strip() for x in prompt.splitlines() if x.strip()))
+            h.agents.set(c, a.id, state='active', pid=p.pid, pidAt=at, **({'harness': hn} if hn else {}))
+        s.jobs[a.id] = Job(n, a.id, t.id, p, log, lf, t0, k, skip=frozenset(x.strip() for x in prompt.splitlines() if x.strip()))
+        with contextlib.suppress(Exception): reg().bind(p.pid, h.cfg.db, h.root, n, tok, hn, at)
         s.say(f'started {n} for t{t.id} with {k} (pid {p.pid}, log {lf})' + (' with a brief of the earlier attempts' if b else ''))
 
     def watchdog(s):
@@ -267,6 +294,7 @@ class Runner:
     def settle(s, j, code):
         s.jobs.pop(j.aid, None)
         if j.log: j.log.close()
+        with contextlib.suppress(Exception): reg().unbind(j.proc.pid if j.proc else None)
         h = s.hive
         text = tail(j.path).rsplit(SEP, 1)[-1].split('\n', 1)[-1] if j.path else ''
         with h.db.tx() as c:
@@ -387,9 +415,10 @@ class Runner:
                     s.stop()
                     break
                 time.sleep(s.poll)
-        except KeyboardInterrupt:
-            s.say('interrupted; stopping agents')
+        except BaseException as e:
+            s.say('interrupted; stopping agents' if isinstance(e, KeyboardInterrupt) else f'stopping agents after {type(e).__name__}: {e}')
             s.stop()
+            if not isinstance(e, KeyboardInterrupt): raise
         finally:
             stop.set()
             if th.is_alive(): th.join(15)

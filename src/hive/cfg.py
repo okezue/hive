@@ -37,11 +37,17 @@ patience = 21600     # seconds of back-to-back rate limits or network errors bef
 probe = 1800         # seconds between probes of a paused command
 backoff = [5, 600]   # first and longest wait between retries, in seconds; rate limits honor the wait the provider asks for
 
-# Agent command per role ("default" for any). Placeholders: {prompt} {promptFile} {task} {agent} {token} {role} {db} {root} {mcp}
-# fallback commands take over when the command is rate limited, down, or out of retries for a task
+# Agent command per role ("default" for any): a harness (claude, codex, grok, gemini, cursor, opencode) or an argv with placeholders
+# {prompt} {promptFile} {task} {agent} {token} {role} {db} {root} {mcp}. fallback commands take over when the command is rate limited,
+# down, or out of retries for a task. Without any, hive run uses the first harness it finds installed.
 # [runner.roles.default]
-# command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
-# fallback = [["codex", "exec", "{prompt}"]]
+# harness = "claude"
+# fallback = ["codex", ["my-agent", "--prompt", "{prompt}"]]
+
+# Your own harness, usable wherever a harness name goes: run is the headless command, chat the interactive one
+# [harness.mine]
+# run = ["mine", "-p", "{prompt}"]
+# chat = ["mine", "{prompt}"]
 '''
 
 
@@ -58,35 +64,53 @@ class Cfg:
     fanout: int = 8
     budget: int = 32
     insights: dict = field(default_factory=dict)
+    harness: dict = field(default_factory=dict)
 
     @property
     def dir(s): return s.db.parent.parent if s.db.parent.name == 'sessions' else s.db.parent
+
+
+IGNORE = '*\n!config.toml\n!.gitignore\n'
 
 
 def find(start):
     return next((d/'.hive' for d in [start, *start.parents] if (d/'.hive').is_dir()), None)
 
 
+def git(p): return next((d for d in [p, *p.parents] if (d/'.git').exists()), None)
+
+
+def explicit(db=None, root=None, session=None):
+    return bool(db or root or session or any(os.environ.get(k) for k in ('HIVE_DB', 'HIVE_ROOT', 'HIVE_SESSION')))
+
+
+def locate(db=None, root=None, session=None, cwd=None):
+    if not explicit(db, root, session):
+        from .reg import mine
+        if b := mine(cwd=cwd or Path.cwd()): return load(b.db, b.root)
+    return load(db, root, session, cwd)
+
+
 def load(db=None, root=None, session=None, cwd=None):
-    cwd = cwd or Path.cwd()
+    root = root or os.environ.get('HIVE_ROOT')
+    cwd = Path(cwd or root or Path.cwd()).expanduser().resolve()
     db, session = db or os.environ.get('HIVE_DB'), session or os.environ.get('HIVE_SESSION')
     if db: db = Path(db).expanduser().resolve()
     else:
-        d = find(cwd) or cwd/'.hive'
+        d = find(cwd) or (git(cwd) or cwd)/'.hive'
         db = d/'sessions'/f'{session}.db' if session else d/'hive.db'
     d = db.parent.parent if db.parent.name == 'sessions' else db.parent
-    root = root or os.environ.get('HIVE_ROOT')
     root = Path(root).expanduser().resolve() if root else d.parent if d.name == '.hive' else cwd
     st = tomllib.loads((d/'config.toml').read_text()) if (d/'config.toml').is_file() else {}
     h, t = st.get('hive', {}), st.get('tree', {})
     return Cfg(db, root, int(h.get('reminder', 20)), int(h.get('tries', 2)), float(h.get('stale', 900)),
                dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 8)), int(t.get('budget', 32)),
-               dict(st.get('insights', {})))
+               dict(st.get('insights', {})), dict(st.get('harness', {})))
 
 
 def init(root):
     d = root/'.hive'
     d.mkdir(parents=True, exist_ok=True)
-    for f, t in (('config.toml', DEFAULT), ('.gitignore', '*\n!config.toml\n!.gitignore\n')):
+    for f, t in (('config.toml', DEFAULT), ('.gitignore', IGNORE)):
         if not (d/f).exists(): (d/f).write_text(t)
     return d

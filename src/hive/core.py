@@ -1,9 +1,10 @@
+from contextlib import suppress
 from pathlib import Path
 
 from .agents import Agents
 from .aware import Aware
 from .board import Board
-from .cfg import load
+from .cfg import IGNORE, load, locate
 from .db import Db
 from .disk import Disk
 from .err import Missing
@@ -39,9 +40,17 @@ class Hive:
         s.know = Know(s)
         s.faults = Faults(s)
         s.tree.tips = s.know.tips
+        if (d := cfg.dir).name == '.hive' and not (d/'.gitignore').exists():
+            with suppress(OSError): (d/'.gitignore').write_text(IGNORE)
+        with suppress(Exception):
+            from .reg import reg
+            reg().seen(cfg.db, s.root, s.root.name + (f':{cfg.db.stem}' if cfg.db.parent.name == 'sessions' else ''))
 
     @classmethod
     def open(cls, db=None, root=None, session=None, summ=None): return cls(load(db, root, session), summ)
+
+    @classmethod
+    def find(cls, db=None, root=None, session=None, cwd=None, summ=None): return cls(locate(db, root, session, cwd), summ)
 
     def join(s, name, role='implementer', workflow=None, parent=None, about='', takeover=False):
         return Sess(s, s.agents.join(name, role, workflow, parent and s.agents.named(parent).id, about, takeover).id)
@@ -54,5 +63,6 @@ class Hive:
         return Sess(s, a.id) if a and a.state != 'left' else s.join(name, 'coordinator', about='the human at the CLI')
 
     def close(s):
+        if s.tools._pool: s.tools._pool.forget()
         s.db.close()
         for x in (*s.know.libs.values(), *s.know.ro.values()): x.db.close()

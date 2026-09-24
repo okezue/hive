@@ -1,4 +1,4 @@
-import json
+import json, os
 
 import pytest
 from mcp.client import Client
@@ -84,7 +84,7 @@ async def testStdioProcess(root):
     from mcp.client.stdio import StdioServerParameters
     (root/'s.txt').write_text('hi\n')
     p = StdioServerParameters(command=sys.executable, args=['-m', 'hive', '--db', str(root/'.hive'/'hive.db'), '--root', str(root), 'mcp',
-                                                            '--agent', 'stdio', '--role', 'implementer'])
+                                                            '--agent', 'stdio', '--role', 'implementer'], env=dict(os.environ))
     async with Client(p) as c:
         assert body(await c.call_tool('me', {}))['name'] == 'stdio'
         assert body(await c.call_tool('read', {'path': 's.txt'}))['version'] == 1

@@ -5,7 +5,8 @@ import pytest
 
 from hive.cli import main
 from hive.err import Err
-from hive.fault import alive, backoff, classify, hint, label, same, span, stamp
+from hive.fault import backoff, classify, hint, label, span
+from hive.reg import alive, same, stamp
 from hive.run import Runner
 from hive.summ import Fail, Llm
 from hive.util import dumps, now
@@ -467,3 +468,10 @@ def testDispatchedAgentsGetTheirBudgetBackOnRetry(hive, run):
     assert hive.agents.named('implementer-t1').budget == 0
     hive.op().retry('t1')
     assert hive.agents.named('implementer-t1').budget == 4
+
+
+def testUnavailableModelsPauseInsteadOfCrashing():
+    for t in ('Error: Couldn\'t set model \'grok-4.7-build-fast\': Invalid params: "unknown model id". Run \'grok models\'',
+              'Error: model "gpt-9" not found', 'API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-x"}} model_not_found'):
+        assert classify(1, t)[0] == 'setup', t
+    assert classify(1, 'the model output looked fine but the test failed')[0] != 'setup'

@@ -1,4 +1,4 @@
-import contextlib, datetime, os, random, re, subprocess, sys, time
+import contextlib, datetime, os, random, re, time
 from collections import Counter, defaultdict
 
 from .err import Clash, Denied
@@ -18,7 +18,7 @@ FIX = {'context': 'Split the task or narrow what it reads.', 'turns': 'Split the
        'hang': 'See what it was waiting on; raise [runner] idle if it works long stretches without Hive calls.',
        'crash': 'Read its log, then fix the command or the environment.', 'rate': 'Add a fallback command, lower [runner] max, or wait for the reset.',
        'net': 'Check the network or the provider status, or add a fallback command.', 'auth': 'Fix the credentials, then run hive retry.',
-       'setup': 'Install or configure the agent command, then run hive retry.'}
+       'setup': 'Install or configure the agent command (its program, API key, or model), then run hive retry.'}
 CODE = r'(?:status|error|http|code|api)\W{0,12}'
 PATS = [(k, re.compile(p, re.I)) for k, p in (
     ('rate', CODE + r'(?:429|529)\b|\b(?:429|529)\W{0,3}(?:too many|overloaded|rate)|rate.?limit(?:ed|.?exceeded|.?reached|.?error)|too many requests|'
@@ -30,7 +30,8 @@ PATS = [(k, re.compile(p, re.I)) for k, p in (
              r'please run /login|not logged in|log ?in (?:again|required)|credit balance is too low|authentication_error|invalid_api_key|'
              r'invalid x-api-key|incorrect api key provided'),
     ('setup', r'must specify the \w*api.?key|api.?key (?:is )?(?:missing|not (?:set|found|provided))|no api key|command not found|'
-              r'executable file not found'),
+              r'executable file not found|unknown model|couldn.t set model|invalid model|model_not_found|'
+              r'model\W{1,3}[\w./:-]{1,60}\W{1,3}(?:is not|was not|not) (?:found|available|supported)|model (?:does not exist|is not available)'),
     ('context', r'context.?(?:length|window)|too many tokens|prompt is too long|maximum context|ran out of room|input exceeds'),
     ('turns', r'max(?:imum)?.?(?:session.?)?turns|turn limit'),
     ('net', CODE + r'50[0234]\b|\b50[0234]\W{0,3}(?:internal|bad gateway|service unavailable|gateway)|'
@@ -125,28 +126,6 @@ def tail(path, n=6000):
     except (OSError, TypeError): return ''
 
 
-def alive(p):
-    if not p: return False
-    try: os.kill(p, 0)
-    except ProcessLookupError: return False
-    except PermissionError: return True
-    except OSError: return False
-    return True
-
-
-def stamp(p):
-    try:
-        if sys.platform.startswith('linux'):
-            with open(f'/proc/{p}/stat') as f: return f.read().rsplit(')', 1)[1].split()[19]
-        return subprocess.run(['/bin/ps' if os.path.exists('/bin/ps') else 'ps', '-o', 'lstart=', '-p', str(p)], capture_output=True, text=True, timeout=5,
-                              env={**os.environ, 'TZ': 'UTC', 'LC_ALL': 'C'}).stdout.strip()
-    except (OSError, IndexError, subprocess.SubprocessError): return ''
-
-
-def same(p, was):
-    if not alive(p): return False
-    now_ = stamp(p) if was else ''
-    return not (was and now_ and now_ != was)
 
 
 def dur(x):

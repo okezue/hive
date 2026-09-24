@@ -36,7 +36,7 @@ class Tree:
 
     def path(s, aid): return '/'.join(s.agents.names()[i] for i in reversed(s.agents.above(aid)))
 
-    def spawn(s, a, goal, role=None, name=None, budget=None, launch='host', grants=None, deliver='', paths=None, verify=False):
+    def spawn(s, a, goal, role=None, name=None, budget=None, launch='host', grants=None, deliver='', paths=None, verify=False, harness=None):
         s.roles.need(a, 'fork', 'spawn agents')
         role, cfg = role or a.role, s.cfg
         if not (goal or '').strip(): raise Bad('a child needs a goal: what it should achieve')
@@ -60,7 +60,7 @@ class Tree:
             n = name or next(x for x in (f'{base}{i}' for i in range(1, 10000)) if x not in taken)
             if name and name in taken: raise Clash(f'{name} is taken')
             kid = s.agents.join(n, role, s.agents.wfNames().get(a.wf), a.id, goal[:200])
-            t = s.tasks.delegate(c, a, kid, goal, deliver, role, paths, verify)
+            t = s.tasks.delegate(c, a, kid, goal, deliver, role, paths, verify, harness)
             c.execute("UPDATE agents SET budget=budget-? WHERE id=?", (b+1, a.id))
             c.execute("UPDATE agents SET budget=?,goal=?,deleg=?,launch=?,grants=?,state=?,task=NULL WHERE id=?",
                       (b, goal, t, launch, None if caps == want else dumps(sorted(caps)), 'pending', kid.id))
@@ -68,7 +68,7 @@ class Tree:
                       {'child': n, 'task': f't{t}'}, a.wf)
             kid = c.execute('SELECT * FROM agents WHERE id=?', (kid.id,)).fetchone()
         out = {'agent': n, 'role': role, 'task': f't{t}', 'depth': kid.depth, 'budget': b, 'launch': launch, 'token': kid.token,
-               'path': s.path(kid.id)}
+               'path': s.path(kid.id)} | ({'harness': harness} if harness else {})
         if caps != want: out['narrowed'] = sorted(want - caps)
         if launch == 'host': out |= {'prompt': s.prompt(kid), 'hint': 'start a subagent with this prompt; gather collects its result'}
         elif launch == 'runner': out['hint'] = "Hive's runner starts it as its own process; gather collects its result"

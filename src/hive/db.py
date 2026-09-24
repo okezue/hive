@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,val TEXT);
 CREATE TABLE IF NOT EXISTS faults(id INTEGER PRIMARY KEY,task INTEGER,agent INTEGER,cmd TEXT,kind TEXT,why TEXT DEFAULT '',tail TEXT DEFAULT '',code TEXT,
   secs REAL,wait REAL,ts REAL,made INTEGER DEFAULT 0,lone INTEGER DEFAULT 0);
 CREATE INDEX IF NOT EXISTS faultTask ON faults(task,id);
+CREATE TABLE IF NOT EXISTS mounts(name TEXT PRIMARY KEY,spec TEXT NOT NULL,owner INTEGER,timeout REAL,ts REAL);
 CREATE INDEX IF NOT EXISTS compNode ON comps(node,id)
 '''
 LIB = '''
@@ -59,7 +60,8 @@ CREATE INDEX IF NOT EXISTS evIns ON evidence(insight)
 ADD = (('agents', 'keeper', 'INTEGER'), ('agents', 'depth', 'INTEGER DEFAULT 0'), ('agents', 'budget', 'INTEGER DEFAULT 0'),
        ('agents', 'goal', "TEXT DEFAULT ''"), ('agents', 'launch', 'TEXT'), ('agents', 'deleg', 'INTEGER'), ('agents', 'grants', 'TEXT'),
        ('tasks', 'deliver', "TEXT DEFAULT ''"), ('tasks', 'node', 'INTEGER'), ('tasks', 'wake', 'REAL DEFAULT 0'), ('agents', 'pid', 'INTEGER'), ('agents', 'pidAt', 'TEXT'),
-       ('faults', 'made', 'INTEGER DEFAULT 0'), ('faults', 'lone', 'INTEGER DEFAULT 0'))
+       ('faults', 'made', 'INTEGER DEFAULT 0'), ('faults', 'lone', 'INTEGER DEFAULT 0'), ('agents', 'harness', "TEXT DEFAULT ''"),
+       ('tasks', 'harness', "TEXT DEFAULT ''"))
 
 
 class Db:

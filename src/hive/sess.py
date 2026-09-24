@@ -6,7 +6,9 @@ from typing_extensions import NotRequired, TypedDict
 
 from .err import Anon, Bad, Clash, Denied, Missing
 from .log import fmt
+from .harness import profile
 from .mail import show
+from .mount import spec
 from .merge import lines as split
 from .prompt import brief, task as taskPrompt
 from .util import J, dumps, line, now, pid, poll
@@ -32,6 +34,7 @@ class Spec(TypedDict):
     kind: NotRequired[str]
     assignee: NotRequired[str]
     parent: NotRequired[str]
+    harness: NotRequired[str]
 
 
 class Sess:
@@ -263,6 +266,7 @@ class Sess:
     def abandon(s, id: str, note: str = ''): return s.hive.files.mrs.abandon(s._me(), id, note)
 
     def plan(s, tasks: list[Spec], workflow: str | None = None, chain: bool = False):
+        for t in tasks: t.get('harness') and profile(t['harness'], s.hive.cfg, True)
         return s.hive.tasks.plan(s._me(), [dict(t) for t in tasks], workflow, chain)
 
     def tasks(s, state: str | None = None, role: str | None = None, mine: bool = False, scope: str = 'auto'):
@@ -325,8 +329,9 @@ class Sess:
         return {'agent': t.name, 'role': role}
 
     def spawn(s, goal: str, role: str | None = None, name: str | None = None, budget: int | None = None, launch: str = 'host',
-              grants: list[str] | None = None, deliver: str = '', paths: list[str] | None = None, verify: bool | str = False):
-        return s.hive.tree.spawn(s._me(), goal, role, name, budget, launch, grants, deliver, paths, verify)
+              grants: list[str] | None = None, deliver: str = '', paths: list[str] | None = None, verify: bool | str = False, harness: str | None = None):
+        if harness: profile(harness, s.hive.cfg, True)
+        return s.hive.tree.spawn(s._me(), goal, role, name, budget, 'runner' if harness and launch == 'host' else launch, grants, deliver, paths, verify, harness)
 
     def gather(s, of: list[str] | str | None = None, secs: float = 60, any: bool = False, budget: int = 2000):
         return s.hive.tree.gather(s._me(), of, secs, any, budget)
@@ -396,9 +401,15 @@ class Sess:
               timeout: float = 60):
         return s.hive.tools.offer(s._me(), name, about, schema, kind, argv, timeout)
 
-    def tools(s):
+    def tools(s, query: str = ''):
         s._me()
-        return {'tools': s.hive.tools.all()}
+        return {'tools': s.hive.tools.all(query), 'mounts': s.hive.tools.mounts()}
+
+    def mount(s, name: str, command: str | None = None, args: list[str] | None = None, env: dict[str, str] | None = None, url: str | None = None,
+              headers: dict[str, str] | None = None, cwd: str | None = None, timeout: float = 120):
+        return s.hive.tools.mount(s._me(), name, spec(command, args, env, url, headers, cwd), timeout)
+
+    def unmount(s, name: str): return s.hive.tools.unmount(s._me(), name)
 
     def call(s, name: str, args: dict[str, Any] | None = None, wait: float = 30): return s.hive.tools.call(s._me(), name, args, wait)
 

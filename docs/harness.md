@@ -2,65 +2,64 @@
 
 Every agent needs the Hive MCP server. Hooks are optional and add three things MCP cannot: interrupts delivered between tool calls that do not touch Hive, automatic adoption of edits made with the harness's own edit tools, and a stop gate that keeps an agent working while an interrupt or merge request is waiting on it.
 
-All examples assume `hive init` was run in the project, so `hive` finds `.hive/hive.db` from the working directory. Set `HIVE_DB` and `HIVE_ROOT` when agents run elsewhere.
+## hive install
+
+`hive install [harness ...] [--project] [--no-hooks] [--dry-run]` writes the server (and hooks) into each harness's own files, for your user by default or for the project with `--project`. It changes only Hive's entries, backs up user-level files before changing them, validates what it wrote by parsing it back, and stops with an error instead of rewriting a file it cannot parse. `hive uninstall` removes exactly those entries. Afterwards it runs `hive doctor`, which starts the configured server and lists its tools, and asks the harness itself (`<harness> mcp list`) whether it loads Hive.
+
+| Harness | MCP server | Hooks | Notes |
+|---|---|---|---|
+| Claude Code | `~/.claude.json`, or `.mcp.json` | `~/.claude/settings.json`, or `.claude/settings.json` | A project install pre-approves the server in `.claude/settings.local.json` |
+| Codex | `~/.codex/config.toml`, or `.codex/config.toml` | `~/.codex/hooks.json`, or `.codex/hooks.json` | Codex runs project files only in trusted projects, and asks once to trust new hooks (`/hooks`) |
+| Grok Build | `~/.grok/config.toml`, or `.grok/config.toml` | `~/.grok/hooks/hive.json`, or `.grok/hooks/hive.json` | Project files need a trusted folder (`/hooks-trust`), and project hooks load only inside a git repository |
+| Gemini CLI | `~/.gemini/settings.json`, or `.gemini/settings.json` | the same file | Gemini turns off every MCP server, user ones included, in folders it does not trust; headless agents Hive starts pass `--skip-trust` for their session |
+| Cursor CLI | `~/.cursor/mcp.json`, or `.cursor/mcp.json` | none | |
+| opencode | `~/.config/opencode/opencode.json`, or `opencode.json` | none | |
+
+The server entry is only `hive mcp` (plus `--dir <project>` for a project install): it carries no identity and no paths, so one entry serves every project and every agent. The server opens nothing until an agent uses it, and then finds its hive from the agent's identity, the environment, or the working directory.
 
 ## Identity
 
-Hive needs to know which agent is calling.
+Hive needs to know which agent is calling, and finds out in this order:
 
-- One MCP server per agent: pass `--agent <name> --role <role>` (or set `HIVE_AGENT` and `HIVE_ROLE`). The agent is created on first use and resumed afterwards.
-- One connection shared by several agents, as with subagents of one host: each agent calls `join` (or receives a token from a coordinator's `dispatch` or `spawn`) and passes `agent="<token>"` on every call. The token is in the brief Hive returns.
-- Hooks read the same identity from `HIVE_AGENT` / `HIVE_ROLE` or `HIVE_AGENT_TOKEN` in the harness's environment, so start the harness with them set, for example `HIVE_AGENT=alice HIVE_ROLE=implementer claude`. Hooks skip events that come from subagents, whose identity the hook cannot tell apart.
+1. Explicit settings: `--agent <name> --role <role>` on `hive mcp`, or `HIVE_AGENT` / `HIVE_ROLE` / `HIVE_AGENT_TOKEN` in the environment.
+2. The harness process. `hive start` and `hive run` record every harness process they launch in `~/.hive/hives.db`, and a session that calls `join` records the harness it runs under. The MCP server and the hooks look up their own process ancestry there, so they know their agent even when the harness hands them no environment (Gemini removes variables that look like secrets, and Codex passes MCP servers only a short list).
+3. A `join` call. Several agents sharing one connection, as subagents of one host do, each pass their token as `agent` on every call; the token is in the brief Hive returns.
 
-## Claude Code
+Hooks skip events that come from subagents, whose identity the hook cannot tell apart. Installed hook commands start with a shell check, so in a session that is not part of any hive (no Hive identity in its environment and no agent bound anywhere on the machine) they exit before starting Python, and they never print anything when Hive has nothing to say.
 
-```sh
-claude mcp add hive -- hive mcp --agent alice --role implementer
-```
+## hive start
 
-`.claude/settings.json`:
+`hive start <harness> [prompt] [--name n] [--role r] [--task t3] [--model m] [-p] [-- extra harness args]` joins a new agent to the project's hive and runs the harness as it: interactively in your terminal, or headless with `-p`. The agent gets the hive's brief (its role, charter, token, and how to work here) as its first prompt, or through the SessionStart hook when the harness has one. When the harness exits the agent leaves the hive, and a task it had not finished goes back to ready. If Hive is not yet installed for that harness, `hive start` installs it for your user first and says so.
 
-```json
-{
-  "hooks": {
-    "SessionStart": [{"hooks": [{"type": "command", "command": "hive hook start"}]}],
-    "PreToolUse": [{"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "hive hook pre"}]}],
-    "PostToolUse": [{"hooks": [{"type": "command", "command": "hive hook post"}]}],
-    "Stop": [{"hooks": [{"type": "command", "command": "hive hook stop"}]}],
-    "SessionEnd": [{"hooks": [{"type": "command", "command": "hive hook end"}]}]
-  }
-}
-```
+| Harness | Interactive | Headless (`-p` and `hive run`) |
+|---|---|---|
+| claude | `claude <prompt>` | `claude -p <prompt> --permission-mode bypassPermissions` |
+| codex | `codex -C <root> <prompt>` | `codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C <root> <prompt>` |
+| grok | `grok --cwd <root> <prompt>` | `grok --prompt-file <file> --cwd <root> --permission-mode bypassPermissions --no-auto-update` |
+| gemini | `gemini -i <prompt>` | `gemini -p <prompt> --yolo --skip-trust` |
+| cursor | `cursor-agent <prompt>` | `cursor-agent -p <prompt> --force --approve-mcps` |
+| opencode | `opencode --prompt <prompt>` | `opencode run <prompt>` |
 
-## Grok Build
-
-`~/.grok/config.toml` (or the project's `.grok/config.toml`):
+Override any of these, or add your own agent CLI, in `.hive/config.toml`:
 
 ```toml
-[mcp_servers.hive]
-command = "hive"
-args = ["mcp", "--agent", "grok-1", "--role", "implementer"]
+[harness.grok]
+run = ["grok", "--prompt-file", "{promptFile}", "--cwd", "{root}", "-m", "grok-4.7-build-fast", "--permission-mode", "bypassPermissions"]
+
+[harness.mine]
+run = ["mine", "--headless", "{prompt}"]
+chat = ["mine", "{prompt}"]
 ```
 
-Grok Build reads the Claude Code hook file above, or put the same JSON in `.grok/hooks/hive.json`; the `Edit|Write` matcher also matches Grok's `search_replace`. Grok loads project hooks only inside a git repository, so run `git init` in a scratch workspace or the hooks silently never fire (`grok inspect` lists what it loaded). Headless runs (`grok -p`) need a trusted folder (`--trust`) or `GROK_FOLDER_TRUST=0` before they read the project's `.grok/config.toml`. Grok truncates large MCP results (20,000 bytes by default), so read big files in ranges with `read(path, start, end)`.
+## Manual setup
 
-## Codex
-
-`~/.codex/config.toml`:
-
-```toml
-[mcp_servers.hive]
-command = "hive"
-args = ["mcp", "--agent", "codex-1", "--role", "implementer"]
-```
-
-## Cursor and other MCP clients
+For MCP clients Hive does not know, add the server yourself:
 
 ```json
-{"mcpServers": {"hive": {"command": "hive", "args": ["mcp", "--agent", "cursor-1", "--role", "implementer"]}}}
+{"mcpServers": {"hive": {"command": "hive", "args": ["mcp"]}}}
 ```
 
-`hive mcp-config --agent <name> --role <role>` prints this entry with the hive's paths filled in.
+`hive mcp-config --agent <name> --role <role>` prints an entry with this hive's paths and an identity filled in. Hooks take the event on stdin in Claude Code's format (`hive hook pre|post|prompt|stop|start|end`), Gemini's (`--format gemini`), or return plain text (`--format text`). Grok truncates large MCP results (20,000 bytes by default), so read big files in ranges with `read(path, start, end)`.
 
 ## Agents on other machines
 
@@ -82,21 +81,18 @@ A coordinator can start each agent itself: `dispatch('t3')` returns a new agent'
 max = 3
 
 [runner.roles.default]
-command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
-fallback = [["codex", "exec", "{prompt}"]]   # takes over while claude is rate limited, down, or out of retries for a task
+harness = "claude"
+fallback = ["codex"]   # takes over while claude is rate limited, down, or out of retries for a task
 
 [runner.roles.verifier]
-command = ["codex", "exec", "{prompt}"]
+harness = "codex"
 
 [runner.roles.composer]
-command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
-
-[runner.roles.distiller]
-command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
+command = ["my-agent", "--prompt", "{prompt}", "--mcp-config", "{mcp}"]   # any command works too
 ```
 
 ```sh
 hive plan plan.json && hive run
 ```
 
-With commands for `composer` and `distiller`, the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, up to `max` at a time, passes each one `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, and logs its output under `.hive/run/`. When an agent stops without finishing, the runner reads the reason from its exit code and last lines of output (Claude Code's `API Error: 429` or `usage limit reached|<reset time>`, Codex's `exceeded retry limit` or `ran out of room in the model's context window`, Grok's `max turns reached`, Gemini's quota and `max session turns` messages, plus timeouts, hangs, and crashes) and acts on it as described in the README under Failures and recovery: it cools a rate-limited command for as long as the provider asks, switches to a `fallback`, restarts the same agent with a brief of its progress, or, when nothing is left to try, fails the task with a diagnosis you can act on and `hive retry`.
+With a default command or harness (or ones for `composer` and `distiller`), the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, up to `max` at a time, records each process in the registry, passes it `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, and logs its output under `.hive/run/`. When an agent stops without finishing, the runner reads the reason from its exit code and last lines of output (Claude Code's `API Error: 429` or `usage limit reached|<reset time>`, Codex's `exceeded retry limit` or `ran out of room in the model's context window`, Grok's `max turns reached`, Gemini's quota and `max session turns` messages, plus timeouts, hangs, and crashes) and acts on it as described in the README under Failures and recovery: it cools a rate-limited command for as long as the provider asks, switches to a `fallback`, restarts the same agent with a brief of its progress, or, when nothing is left to try, fails the task with a diagnosis you can act on and `hive retry`.

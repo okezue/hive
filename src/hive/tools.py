@@ -2,7 +2,8 @@ import json, os, re, subprocess
 
 import jsonschema
 
-from .err import Bad, Clash, Denied, Missing
+from .err import Bad, Clash, Denied, Err, Missing
+from .mount import NAME as MOUNT, Pool, text
 from .util import J, clip, dumps, line, now, pid, poll
 
 NAME = re.compile(r'^[a-z][a-z0-9_.-]{0,63}$')
@@ -10,7 +11,50 @@ KINDS = ('agent', 'command')
 
 
 class Tools:
-    def __init__(s, db, log, mail, agents, roles, root): s.db, s.log, s.mail, s.agents, s.roles, s.root = db, log, mail, agents, roles, root
+    def __init__(s, db, log, mail, agents, roles, root): s.db, s.log, s.mail, s.agents, s.roles, s.root, s._pool = db, log, mail, agents, roles, root, None
+
+    @property
+    def pool(s):
+        if s._pool is None: s._pool = Pool(s.root)
+        return s._pool
+
+    def mount(s, a, n, sp, timeout=120):
+        s.roles.need(a, 'exec', 'mount MCP servers')
+        if not MOUNT.match(n or ''): raise Bad(f'invalid server name {n!r}', "lowercase letters, digits, '_', '-'; a letter first; up to 32")
+        got, names = [], set()
+        for t in s.pool.do(n, sp, 'list', timeout=min(float(timeout), 120.)).tools:
+            k = f'{n}.' + (re.sub(r'[^a-z0-9_.-]', '_', t.name.lower()) or 'tool')[:62-len(n)]
+            while k in names: k += '_'
+            names.add(k)
+            got.append((k, t))
+        with s.db.tx() as c:
+            if (o := c.execute('SELECT owner FROM mounts WHERE name=?', (n,)).fetchone()) and o.owner != a.id and not s.roles.can(a, 'spawn'):
+                raise Clash(f'{n} was mounted by {s.agents.names().get(o.owner)}', 'pick another name')
+            for k, _ in got:
+                if (r := c.execute('SELECT kind,argv FROM tools WHERE name=?', (k,)).fetchone()) and not (r.kind == 'mcp' and J(r.argv)[0] == n):
+                    raise Clash(f'{k} is already a shared tool', 'mount the server under another name')
+            c.execute("DELETE FROM tools WHERE kind='mcp' AND json_extract(argv,'$[0]')=?", (n,))
+            c.execute('INSERT OR REPLACE INTO mounts VALUES(?,?,?,?,?)', (n, dumps(sp), a.id, float(timeout), now()))
+            c.executemany('INSERT INTO tools VALUES(?,?,?,?,?,?,?,?)', [(k, a.id, clip((t.description or t.title or t.name).strip(), 1500),
+                          dumps(t.input_schema or {'type': 'object'}), 'mcp', dumps([n, t.name]), float(timeout), now()) for k, t in got])
+            s.log.add(c, a.id, 'tool.mounted', f'mounted MCP server {n} with {len(got)} tools', f'tool:{n}', wf=a.wf)
+        return {'mount': n, 'tools': [k for k, _ in got]} | ({'hint': f"everyone in the hive can call them, e.g. call('{got[0][0]}', args)"} if got else {})
+
+    def unmount(s, a, n):
+        with s.db.tx() as c:
+            if (r := c.execute('SELECT owner FROM mounts WHERE name=?', (n,)).fetchone()) is None: raise Missing(f'no mounted server {n!r}')
+            if r.owner != a.id and not s.roles.can(a, 'spawn'): raise Denied('only whoever mounted it or a coordinator can unmount it')
+            c.execute('DELETE FROM mounts WHERE name=?', (n,))
+            k = c.execute("DELETE FROM tools WHERE kind='mcp' AND json_extract(argv,'$[0]')=?", (n,)).rowcount
+            s.log.add(c, a.id, 'tool.unmounted', f'unmounted {n} ({k} tools)', f'tool:{n}', wf=a.wf)
+        if s._pool: s._pool.forget(n)
+        return {'mount': n, 'removed': k}
+
+    def mounts(s):
+        names = s.agents.names()
+        return [{'name': r.name, 'by': names.get(r.owner), 'server': J(r.spec).get('url') or ' '.join([J(r.spec)['command'], *J(r.spec).get('args', [])]),
+                 'tools': s.db.one("SELECT COUNT(*) n FROM tools WHERE kind='mcp' AND json_extract(argv,'$[0]')=?", (r.name,)).n}
+                for r in s.db.q('SELECT * FROM mounts ORDER BY name')]
 
     def offer(s, a, n, about, schema=None, kind='agent', argv=None, timeout=60):
         s.roles.need(a, 'offer', 'share tools')
@@ -40,10 +84,11 @@ class Tools:
             s.log.add(c, a.id, 'tool.withdrawn', f'withdrew {n}', f'tool:{n}', wf=a.wf)
         return {'tool': n, 'withdrawn': True}
 
-    def all(s):
-        names, live = s.agents.names(), {x.id for x in s.agents.all()}
+    def all(s, query=''):
+        names, live, ws = s.agents.names(), {x.id for x in s.agents.all()}, query.lower().split()
         return [{'name': r.name, 'owner': names.get(r.owner), 'kind': r.kind, 'about': r.about, 'schema': J(r.schema, {}),
-                 'available': r.kind == 'command' or r.owner in live} for r in s.db.q('SELECT * FROM tools ORDER BY name')]
+                 'available': r.kind != 'agent' or r.owner in live} for r in s.db.q('SELECT * FROM tools ORDER BY name')
+                if all(w in f'{r.name} {r.about}'.lower() for w in ws)]
 
     def done(s, i):
         return s.db.one("SELECT * FROM calls WHERE id=? AND state!='pending'", (i,))
@@ -54,7 +99,9 @@ class Tools:
         if (t := s.db.one('SELECT * FROM tools WHERE name=?', (n,))) is None: raise Missing(f'no shared tool {n!r}', 'tools lists them')
         try: jsonschema.validate(args, J(t.schema, {}))
         except jsonschema.ValidationError as e: raise Bad(f"arguments do not match {n}'s schema: {e.message}") from None
+        except jsonschema.SchemaError: pass
         if t.kind == 'command': return s.run(a, t, args)
+        if t.kind == 'mcp': return s.mcp(a, t, args)
         o = s.agents.get(t.owner)
         if o.state == 'left': raise Clash(f'{o.name}, who serves {n}, has left')
         if o.id == a.id: raise Bad('this is your own tool; run it directly')
@@ -94,6 +141,22 @@ class Tools:
         if k.err: out['error'] = k.err
         if k.result is not None: out['result'] = J(k.result)
         return out
+
+    def mcp(s, a, t, args):
+        n, orig = J(t.argv)
+        if (m := s.db.one('SELECT * FROM mounts WHERE name=?', (n,))) is None: raise Missing(f'MCP server {n} is no longer mounted', 'tools lists what is')
+        st, res, err = 'done', None, None
+        try:
+            r = s.pool.do(n, J(m.spec), 'call', orig, args, timeout=m.timeout or 120)
+            body = text(r)
+            if r.is_error: st, err = 'error', clip(body or 'the tool reported an error', 4000)
+            else: res = clip(body, 20000) if body or r.structured_content is None else r.structured_content
+        except Err as e: st, err = 'error', str(e)
+        with s.db.tx() as c:
+            i = c.execute('INSERT INTO calls(tool,src,owner,args,state,result,err,ts,doneAt) VALUES(?,?,?,?,?,?,?,?,?)',
+                          (t.name, a.id, t.owner, dumps(args), st, None if res is None else dumps(res), err, now(), now())).lastrowid
+            s.log.add(c, a.id, 'tool.ran', f'called {t.name}: {st}', f'tool:{t.name}', wf=a.wf)
+        return {'call': f'c{i}', 'tool': t.name, 'state': st} | ({'error': err} if err else {'result': res})
 
     def run(s, a, t, args):
         argv, payload, st, res, err = J(t.argv, []), json.dumps(args), 'done', None, None

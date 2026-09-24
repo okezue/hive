@@ -8,7 +8,7 @@ from hive.cli import main
 from hive.err import Err
 from hive.harness import GE, doctor, install, installed, servers, uninstall
 from hive.hook import handle
-from hive.reg import WRAP, chain, host, mine, reg
+from hive.reg import chain, host, mine, reg
 from hive.run import Runner
 from hive.srv import build
 
@@ -157,7 +157,21 @@ def testRegistryFindsTheHarnessThroughProcessAncestry(home, root):
     with r.db.tx() as c: c.execute("UPDATE binds SET at='Thu Jan  1 00:00:00 1970'")
     assert mine() is None
     up = chain()
-    assert up[0][0] == os.getpid() and host()[0] in [q for q, _ in up[1:]] and host()[1] not in WRAP
+    assert up[0][0] == os.getpid() and up[1][0] == os.getppid()
+
+
+def testHostIsTheDirectHarnessClient(monkeypatch):
+    fake = lambda *xs: monkeypatch.setattr('hive.reg.chain', lambda *a, **k: [(9, 'python3.12'), *xs])
+    fake((8, 'zsh'), (7, 'grok-1.0.41-macos-aarch64'), (6, 'login'))
+    assert host() == (7, 'grok')
+    fake((8, 'Terminal'), (7, 'grok'))
+    assert host() == (None, '')
+    fake((8, 'python3.12'), (7, 'grok'))
+    monkeypatch.setattr('hive.reg.args', lambda p: 'python3 /opt/agent/run.py')
+    assert host() == (None, ''), "an agent's own script must never take over its harness's identity"
+    fake((8, 'env'), (7, 'node'))
+    monkeypatch.setattr('hive.reg.args', lambda p: 'node --max-old-space-size=4096 /usr/lib/node_modules/@google/gemini-cli/dist/index.js')
+    assert host() == (7, 'gemini')
 
 
 def testMcpFindsItsProjectLazilyAndBindsTheHarness(home, tmp_path):

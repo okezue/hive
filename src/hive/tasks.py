@@ -35,6 +35,7 @@ class Tasks:
             if v: out[k] = v
         if t.wf: out['workflow'] = s.agents.wfNames().get(t.wf)
         if t.get('node'): out['node'] = names.get(t.node)
+        if (t.get('wake') or 0) > now() and t.state == 'ready': out['retryIn'] = f'{t.wake-now():.0f}s'
         if full:
             out |= {'about': t.about, 'tries': t.tries, 'creator': names.get(t.creator), 'created': ago(t.ts)}
             for k in ('deliver', 'result', 'notes', 'parent'):
@@ -270,6 +271,8 @@ class Tasks:
                 and (h := o.parent and s.agents.heir(c, o.parent)):
             c.execute('UPDATE agents SET budget=budget+? WHERE id=?', (o.budget, h.id))
             c.execute('UPDATE agents SET budget=0 WHERE id=?', (o.id,))
+            c.execute('UPDATE tasks SET notes=? WHERE id=?', (dumps([*J(c.execute('SELECT notes FROM tasks WHERE id=?', (tid,)).fetchone().notes, []),
+                                                                  {'by': 'hive', 'budget': o.budget, 'to': h.name}]), tid))
 
     def file(s, c, a, title, about, role, kind, node=None):
         i = c.execute("INSERT INTO tasks(wf,title,about,role,kind,state,creator,node,ts) VALUES(?,?,?,?,?,'ready',?,?,?)",

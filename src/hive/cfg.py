@@ -4,7 +4,7 @@ from pathlib import Path
 
 DEFAULT = '''[hive]
 reminder = 20        # restate an agent's charter every N Hive calls, 0 to disable
-tries = 2            # times a task may be taken before it fails
+tries = 2            # times a task may be taken, or its agent may crash on one command, before it fails
 stale = 900          # seconds without activity before an agent shows as stale
 
 [summarizer]
@@ -28,10 +28,20 @@ global = "~/.hive/insights.db"   # library for insights saved with scope "global
 max = 3
 poll = 1.0
 budget = 4           # budget each dispatched agent gets for spawning helpers; it returns when the agent exits
+timeout = 7200       # seconds an agent may run before it is stopped and restarted with a brief of its progress (0: no limit)
+idle = 1800          # seconds without Hive calls or output before an agent counts as hung and is restarted (0: never)
+resumes = 3          # restarts per command after a turn limit, context limit, timeout, hang, or early exit that saved no progress
+                     # (restarts that saved progress are free, up to five times this many in all)
+waits = 12           # retries per command after rate limits or network errors that saved no progress
+patience = 21600     # seconds of back-to-back rate limits or network errors before a command is paused, reported, and probed
+probe = 1800         # seconds between probes of a paused command
+backoff = [5, 600]   # first and longest wait between retries, in seconds; rate limits honor the wait the provider asks for
 
 # Agent command per role ("default" for any). Placeholders: {prompt} {promptFile} {task} {agent} {token} {role} {db} {root} {mcp}
+# fallback commands take over when the command is rate limited, down, or out of retries for a task
 # [runner.roles.default]
 # command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
+# fallback = [["codex", "exec", "{prompt}"]]
 '''
 
 

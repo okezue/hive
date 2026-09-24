@@ -13,7 +13,7 @@ GROUPS = {
     'msgs': 'send inbox ack ask wait share handoff follow',
     'ctx': 'put get keys drop',
     'files': 'read edit write sync diff release claim files merges propose respond abandon',
-    'tasks': 'plan tasks task take done fail verify cancel dispatch define assign',
+    'tasks': 'plan tasks task take done fail verify cancel dispatch define assign retry faults',
     'tree': 'spawn gather tree node walk path find brief fund adopt escalate decide issues',
     'know': 'note findings material compose gist stale harvest distill recall weigh retire',
     'tools': 'offer tools call answer result withdraw',
@@ -85,6 +85,10 @@ DOCS = {
     'escalate': 'Ask your keeper for a decision (options, or extra budget via fund) instead of guessing; it moves up the tree if they pass it on.',
     'decide': "Answer an issue raised to you: a choice (and optionally budget), or choice='up' to pass it to your own keeper.",
     'issues': 'Open issues you raised or hold (all=true for every open issue).',
+    'retry': 'Reopen a failed, cancelled, or blocked task (or skip its retry wait); a runner restarts it with a brief of every earlier attempt. '
+             'Without an id, coordinators resume agent commands the runner paused after authentication, setup, or long rate-limit failures.',
+    'faults': 'How agent commands are doing (ok, cooling down, probing, paused), recent agent failures and restarts, tasks waiting to '
+              'retry, and open issues about them.',
     'note': "Record a finding as you work: a fact, decision, problem, method, or result, with refs to evidence (files, tasks, messages; "
             "'against:f12' marks a contradiction). Composers and distillers build on findings.",
     'findings': 'Findings recorded by an agent and (deep) everyone below it, newest first, with where each came from.',
@@ -124,6 +128,7 @@ ARGS = {
     'expect': 'Fail unless the entry is still at this version',
     'wait': 'Seconds to wait',
     'secs': 'Seconds to wait',
+    'retry.note': 'Why it is being retried, or what changed',
     'tasks.state': 'Comma-separated: pending, ready, running, in_review, done, failed, blocked, cancelled',
     'progress.state': 'active, idle, or done',
     'merges.state': 'open, resolved, abandoned, or all',
@@ -214,7 +219,8 @@ def wrap(name, who):
         try: x = who(kw.pop('agent', None))
         except Err as e: raise ToolError(str(e)) from None
         try: res = getattr(x, name)(**kw)
-        except sqlite3.Error as e: raise ToolError(f'storage error: {e}') from None
+        except sqlite3.Error as e:
+            raise ToolError(f'storage error: {e}' + ('; the store is busy with other agents, so call again in a few seconds' if 'locked' in str(e) or 'busy' in str(e) else '')) from None
         except Err as e:
             n = x.notices()
             raise ToolError(str(e) + (f'\n\n{render({}, n)}' if n else '')) from None

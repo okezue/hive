@@ -386,6 +386,12 @@ class Sess:
 
     def retire(s, id: str, reason: str): return s.hive.know.retire(s._me(), id, reason)
 
+    def retry(s, id: str | None = None, note: str = ''): return s.hive.faults.retry(s._me(), id, note)
+
+    def faults(s, limit: int = 20):
+        s._me()
+        return s.hive.faults.show(limit)
+
     def offer(s, name: str, about: str, schema: dict[str, Any] | None = None, kind: str = 'agent', argv: list[str] | None = None,
               timeout: float = 60):
         return s.hive.tools.offer(s._me(), name, about, schema, kind, argv, timeout)

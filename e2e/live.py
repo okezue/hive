@@ -180,7 +180,28 @@ def tree(c):
     h.close()
 
 
-SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree}
+def recover(c):
+    d = workspace('recover', {'README.md': '# numbers\n'})
+    h = Hive.open(d/'.hive'/'hive.db', d)
+    words = ['one', 'two', 'three', 'four', 'five', 'six']
+    h.op().plan([{'title': 'Write the number files', 'role': 'implementer',
+                  'about': 'Create one.txt, two.txt, three.txt, four.txt, five.txt, and six.txt in the workspace root, in that order. Each holds its number '
+                           'as a word on one line (one.txt holds "one"). Write each file with hive write, then call hive progress naming the files written '
+                           'so far. Make one tool call per turn, never several at once. When all six exist, call done.'}])
+    r = Runner(h, {'default': grok(7, file='{promptFile}')}, cap=1, poll=1, say=lambda t: print('  [run]', t, flush=True), resumes=6,
+               env={'GROK_FOLDER_TRUST': '0', 'HIVE_GLOBAL': str(d/'global.db')}).run(1800)
+    ks = [f.kind for f in h.db.q('SELECT kind FROM faults ORDER BY id')]
+    c(r['stuck'] == {} and h.tasks.get(1).state == 'done', f"the task finished across restarts: {r['counts']}")
+    c('turns' in ks, f"Grok's turn limit was recognized from its output: {ks}")
+    c(all((d/f'{w}.txt').is_file() and (d/f'{w}.txt').read_text().strip() == w for w in words), 'all six files exist with the right contents')
+    c(len({x.name for x in h.db.q('SELECT name FROM agents WHERE deleg=1')}) == 1, 'every restart kept the same agent')
+    p = (d/'.hive'/'run'/'implementer-t1.prompt.md').read_text()
+    c('Hive restarted this task' in p and 'Files changed: ' in p and 'one.txt' in p.split('Files changed: ')[1],
+      'the last attempt started with a brief listing the files earlier attempts wrote')
+    h.close()
+
+
+SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover}
 
 
 def main():

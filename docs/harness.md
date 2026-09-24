@@ -83,6 +83,7 @@ max = 3
 
 [runner.roles.default]
 command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
+fallback = [["codex", "exec", "{prompt}"]]   # takes over while claude is rate limited, down, or out of retries for a task
 
 [runner.roles.verifier]
 command = ["codex", "exec", "{prompt}"]
@@ -98,4 +99,4 @@ command = ["claude", "-p", "{prompt}", "--mcp-config", "{mcp}"]
 hive plan plan.json && hive run
 ```
 
-With commands for `composer` and `distiller`, the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, up to `max` at a time, passes each one `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, logs its output under `.hive/run/`, and retries or fails tasks whose agent exits without finishing.
+With commands for `composer` and `distiller`, the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, up to `max` at a time, passes each one `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, and logs its output under `.hive/run/`. When an agent stops without finishing, the runner reads the reason from its exit code and last lines of output (Claude Code's `API Error: 429` or `usage limit reached|<reset time>`, Codex's `exceeded retry limit` or `ran out of room in the model's context window`, Grok's `max turns reached`, Gemini's quota and `max session turns` messages, plus timeouts, hangs, and crashes) and acts on it as described in the README under Failures and recovery: it cools a rate-limited command for as long as the provider asks, switches to a `fallback`, restarts the same agent with a brief of its progress, or, when nothing is left to try, fails the task with a diagnosis you can act on and `hive retry`.

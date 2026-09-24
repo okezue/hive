@@ -7,6 +7,7 @@ from .cfg import load
 from .db import Db
 from .disk import Disk
 from .err import Missing
+from .fault import Faults
 from .files import Files
 from .log import Log
 from .mail import Mail
@@ -36,6 +37,7 @@ class Hive:
         s.notice = Notice(s.mail, s.log, s.agents, s.roles, s.files.mrs, cfg.reminder)
         s.tree = Tree(s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, cfg)
         s.know = Know(s)
+        s.faults = Faults(s)
         s.tree.tips = s.know.tips
 
     @classmethod

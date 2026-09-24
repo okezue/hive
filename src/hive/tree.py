@@ -147,6 +147,8 @@ class Tree:
         if h and a.budget:
             c.execute('UPDATE agents SET budget=budget+? WHERE id=?', (a.budget, h.id))
             c.execute('UPDATE agents SET budget=0 WHERE id=?', (aid,))
+            if a.deleg and (t := c.execute('SELECT notes FROM tasks WHERE id=?', (a.deleg,)).fetchone()):
+                c.execute('UPDATE tasks SET notes=? WHERE id=?', (dumps([*J(t.notes, []), {'by': 'hive', 'budget': a.budget, 'to': h.name}]), a.deleg))
         if kids or a.budget: s.log.add(c, aid, 'agent.custody', f"left; {len(kids)} child(ren) and budget {a.budget} went to {h.name if h else 'nobody'}",
                                         f'agent:{a.name}', wf=a.wf)
 

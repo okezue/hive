@@ -1,4 +1,4 @@
-import os, re
+import os, re, time
 from dataclasses import asdict, dataclass
 
 import httpx
@@ -61,19 +61,32 @@ class Extract:
         return '\n'.join(out + ([f'… {n-prev-1} lines omitted'] if prev < n-1 else []))
 
 
+def wait(h):
+    try: return max(0., float(h))
+    except (TypeError, ValueError): return None
+
+
 class Llm:
     def __init__(s, url, key, model, timeout=60.):
         s.url, s.key, s.model, s.timeout, s.name = url.rstrip('/'), key, model, timeout, f'llm:{model}'
 
-    def __call__(s, text, focus, target):
-        try:
-            r = httpx.post(f'{s.url}/chat/completions', headers={'Authorization': f'Bearer {s.key}'}, timeout=s.timeout,
-                           json={'model': s.model, 'temperature': .2, 'max_tokens': max(64, int(target*1.5)),
-                                 'messages': [{'role': 'system', 'content': SYSTEM},
-                                              {'role': 'user', 'content': f'Focus: {focus}\nAt most about {target} tokens.\n\n{text}'}]})
-            r.raise_for_status()
-            out = r.json()['choices'][0]['message']['content']
-        except (httpx.HTTPError, KeyError, IndexError, ValueError) as e: raise Fail(f'summary request failed: {e}') from e
+    def __call__(s, text, focus, target, tries=3):
+        body = {'model': s.model, 'temperature': .2, 'max_tokens': max(64, int(target*1.5)),
+                'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': f'Focus: {focus}\nAt most about {target} tokens.\n\n{text}'}]}
+        for i in range(tries):
+            try:
+                r = httpx.post(f'{s.url}/chat/completions', headers={'Authorization': f'Bearer {s.key}'}, timeout=s.timeout, json=body)
+                if r.status_code in (408, 409, 429) or r.status_code >= 500:
+                    if i < tries-1:
+                        time.sleep(min(20., wait(r.headers.get('retry-after')) or 2.**i))
+                        continue
+                r.raise_for_status()
+                out = r.json()['choices'][0]['message']['content']
+                break
+            except (httpx.TimeoutException, httpx.TransportError) as e:
+                if i == tries-1: raise Fail(f'summary request failed: {e}') from e
+                time.sleep(2.**i)
+            except (httpx.HTTPError, KeyError, IndexError, ValueError) as e: raise Fail(f'summary request failed: {e}') from e
         if not isinstance(out, str) or not out.strip(): raise Fail('summary request returned nothing')
         return out.strip()
 

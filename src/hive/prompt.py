@@ -7,7 +7,7 @@ PROTOCOL = '''How to work in the hive (MCP server "hive"):
 - Stay aware with `overview`, `digest`, and `watch` (view live, window, or summary). The agents form a tree: `tree`, `node`, `walk`, `path`, `find`, and `brief` navigate it one neighborhood at a time.
 - When part of your work splits off cleanly, `spawn` a helper with a goal and a deliverable, then `gather` its result. Escalate decisions you cannot make with `escalate`.
 - Record what you learn as you go with `note` (facts, decisions, problems, methods; `against:f12` in refs marks a contradiction). Composers combine findings up the tree and distillers keep the insights; `recall` searches insights saved from earlier work.
-- Post `progress` at milestones and publish findings with `put`.
+- Post `progress` at milestones and publish findings with `put`. If you are stopped by a rate limit, timeout, or crash, Hive restarts you with a brief built from these records, so they are what carries your work over.
 - Stay within your role and your task's paths; ask the agent whose job it is when something is outside them.'''
 
 

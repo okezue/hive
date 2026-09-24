@@ -54,6 +54,10 @@ def status(a):
     print('tasks', ' '.join(f'{k}={n}' for k, n in sorted(v['tasks']['counts'].items())) or '-')
     for t in v['tasks']['active']: print(f"  {t['id']:<6}{t['state']:<11}{t['owner'] or '-':<18}{t['title']}")
     for m in v.get('merges', []): print(f"  {m['mr']} {m['path']} {m['requester']} vs {','.join(filter(None, m['with']))}")
+    f = h.faults.show(5)
+    for g in f['commands']:
+        if g['state'] != 'ok': print(f"  {g['command']}: {g['state']}{' '+g['retryIn'] if g.get('retryIn') else ''}{' ('+g['why']+')' if g.get('why') else ''}")
+    for x in f['waiting'] + f['issues']: print(' ', x)
     for e in v['recent']: print(' ', e)
 
 
@@ -109,6 +113,17 @@ def insights(a):
 def tree(a): print(actor(opened(a), a).tree(a.of or '*', a.depth, 50)['tree'])
 
 
+def retry(a): dump(actor(opened(a), a).retry(a.id, a.note))
+
+
+def faults(a):
+    f = actor(opened(a), a).faults(a.limit)
+    if a.json: return dump(f)
+    for g in f['commands']: print(f"{g['command']:<32}{g['state']:<9}x{g['concurrency']:<5}{g.get('retryIn', ''):<9}{g.get('why', '')}")
+    for k in ('waiting', 'issues', 'faults'):
+        if f[k]: print(k, *f[k], sep='\n  ')
+
+
 def merges(a): dump(actor(opened(a), a).merges(a.id, a.state))
 
 
@@ -123,7 +138,7 @@ def run(a):
         ({'cap': a.max} if a.max else {})
     r = Runner.fromCfg(opened(a), **kw).run(a.timeout)
     dump(r)
-    return 1 if r['stuck'] else 0
+    return 1 if r['stuck'] or r.get('paused') else 0
 
 
 def parser():
@@ -159,6 +174,8 @@ def parser():
     cmd(run, opt('--max', type=int), opt('--timeout', type=float), opt('--watch', action='store_true'), opt('--command', nargs=argparse.REMAINDER))
     cmd(tree, opt('of', nargs='?'), opt('--depth', type=int, default=2), who=True)
     cmd(insights, opt('query', nargs='*'), opt('--limit', type=int, default=20), who=True)
+    cmd(retry, opt('id', nargs='?'), opt('--note', default=''), who=True)
+    cmd(faults, opt('--limit', type=int, default=20), opt('--json', action='store_true'), who=True)
     return p
 
 

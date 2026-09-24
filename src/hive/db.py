@@ -1,4 +1,4 @@
-import contextlib, sqlite3, threading
+import contextlib, sqlite3, threading, time
 from pathlib import Path
 
 from .util import row
@@ -43,6 +43,9 @@ CREATE INDEX IF NOT EXISTS findAgent ON findings(agent);
 CREATE TABLE IF NOT EXISTS comps(id INTEGER PRIMARY KEY,node INTEGER,author INTEGER,text TEXT NOT NULL,sources TEXT DEFAULT '[]',gaps TEXT DEFAULT '',
   upto INTEGER DEFAULT 0,v INTEGER DEFAULT 1,ts REAL,covers TEXT DEFAULT '[]');
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,val TEXT);
+CREATE TABLE IF NOT EXISTS faults(id INTEGER PRIMARY KEY,task INTEGER,agent INTEGER,cmd TEXT,kind TEXT,why TEXT DEFAULT '',tail TEXT DEFAULT '',code TEXT,
+  secs REAL,wait REAL,ts REAL,made INTEGER DEFAULT 0,lone INTEGER DEFAULT 0);
+CREATE INDEX IF NOT EXISTS faultTask ON faults(task,id);
 CREATE INDEX IF NOT EXISTS compNode ON comps(node,id)
 '''
 LIB = '''
@@ -55,7 +58,8 @@ CREATE INDEX IF NOT EXISTS evIns ON evidence(insight)
 '''
 ADD = (('agents', 'keeper', 'INTEGER'), ('agents', 'depth', 'INTEGER DEFAULT 0'), ('agents', 'budget', 'INTEGER DEFAULT 0'),
        ('agents', 'goal', "TEXT DEFAULT ''"), ('agents', 'launch', 'TEXT'), ('agents', 'deleg', 'INTEGER'), ('agents', 'grants', 'TEXT'),
-       ('tasks', 'deliver', "TEXT DEFAULT ''"), ('tasks', 'node', 'INTEGER'))
+       ('tasks', 'deliver', "TEXT DEFAULT ''"), ('tasks', 'node', 'INTEGER'), ('tasks', 'wake', 'REAL DEFAULT 0'), ('agents', 'pid', 'INTEGER'), ('agents', 'pidAt', 'TEXT'),
+       ('faults', 'made', 'INTEGER DEFAULT 0'), ('faults', 'lone', 'INTEGER DEFAULT 0'))
 
 
 class Db:
@@ -93,7 +97,13 @@ class Db:
             finally: s.loc.depth -= 1
             return
         # IMMEDIATE takes the write lock up front, so read-modify-write sequences serialize across processes
-        c.execute('BEGIN IMMEDIATE')
+        for i in range(4):
+            try:
+                c.execute('BEGIN IMMEDIATE')
+                break
+            except sqlite3.OperationalError as e:
+                if i == 3 or not ('locked' in str(e) or 'busy' in str(e)): raise
+                time.sleep(.2*2**i)
         s.loc.depth = 1
         try: yield c
         except BaseException:

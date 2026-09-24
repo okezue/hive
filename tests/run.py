@@ -53,10 +53,10 @@ def testDependenciesAndConcurrency(hive, root, agent):
 def testCrashRetriesThenFails(hive, root, agent):
     op = hive.op()
     op.plan([{'key': 'x', 'title': 'crash'}, {'title': 'after', 'after': ['x']}])
-    r = Runner(hive, {'default': agent}, cap=1, poll=.05).run(60)
+    r = Runner(hive, {'default': agent}, cap=1, poll=.05, backoff=(.05, .1)).run(60)
     assert r['counts'] == {'failed': 1, 'blocked': 1}
     assert len([e for e in events(root) if e[0] == 'start']) == 2
-    assert 'exited with code 1' in hive.tasks.get(1).notes[-1]['failed']
+    assert 'exited with code 1' in [x for x in hive.tasks.get(1).notes if 'failed' in x][-1]['failed']
 
 
 def testOnlyRolesWithCommandsRun(hive, root, agent):

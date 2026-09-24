@@ -214,7 +214,7 @@ def testRunnerRelaunchesSameIdentityThenFails(hive, tmp_path):
     (p := tmp_path/'crash.py').write_text("import os\nopen(os.environ['HIVE_ROOT']+'/runs', 'a').write(os.environ['HIVE_AGENT']+'\\n')\nraise SystemExit(3)\n")
     top = hive.join('top', 'coordinator')
     r = top.spawn('doomed', launch='runner', budget=0)
-    Runner(hive, {'default': [sys.executable, str(p)]}, poll=.05).run(60)
+    Runner(hive, {'default': [sys.executable, str(p)]}, poll=.05, backoff=(.05, .1)).run(60)
     assert (hive.root/'runs').read_text().split() == [r['agent'], r['agent']]
     assert top.task(r['task'])['task']['state'] == 'failed' and 'failed' in top.notices()['interrupts'][0]['body']
 

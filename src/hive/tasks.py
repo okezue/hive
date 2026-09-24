@@ -34,6 +34,7 @@ class Tasks:
         for k, v in (('prio', t.prio), ('verify', t.verify), ('checks', t.checks and f't{t.checks}'), ('paths', t.paths)):
             if v: out[k] = v
         if t.wf: out['workflow'] = s.agents.wfNames().get(t.wf)
+        if t.get('node'): out['node'] = names.get(t.node)
         if full:
             out |= {'about': t.about, 'tries': t.tries, 'creator': names.get(t.creator), 'created': ago(t.ts)}
             for k in ('deliver', 'result', 'notes', 'parent'):

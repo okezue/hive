@@ -4,7 +4,7 @@ from typing import IO
 
 from .err import Err
 from .prompt import mcp
-from .util import now
+from .util import dumps, now
 
 KEYS = ('prompt', 'promptFile', 'task', 'agent', 'token', 'role', 'db', 'root', 'mcp')
 PH = re.compile(r'\{(' + '|'.join(KEYS) + r')\}')
@@ -22,10 +22,10 @@ class Job:
 
 
 class Runner:
-    def __init__(s, hive, cmds, cap=3, poll=1., op=None, say=None, env=None, watch=False):
+    def __init__(s, hive, cmds, cap=3, poll=1., op=None, say=None, env=None, watch=False, budget=4):
         if not cmds: raise ValueError('the runner needs a command, by role or default')
-        s.hive, s.cmds, s.cap, s.poll, s.env, s.watch = hive, cmds, max(1, cap), poll, env or {}, watch
-        s.op, s.say, s.jobs = op or hive.op('runner'), say or (lambda t: None), {}
+        s.hive, s.cmds, s.cap, s.poll, s.env, s.watch, s.budget = hive, cmds, max(1, cap), poll, env or {}, watch, budget
+        s.op, s.say, s.jobs, s.beaten = op or hive.op('runner'), say or (lambda t: None), {}, 0
         s.dir = hive.cfg.dir/'run'
         s.dir.mkdir(parents=True, exist_ok=True)
 
@@ -33,6 +33,7 @@ class Runner:
     def fromCfg(cls, hive, **kw):
         r = hive.cfg.runner
         cmds = {k: list(v['command']) for k, v in r.get('roles', {}).items() if v.get('command')}
+        kw.setdefault('budget', int(r.get('budget', 4)))
         return cls(hive, kw.pop('cmds', None) or cmds, int(kw.pop('cap', None) or r.get('max', 3)), float(kw.pop('poll', r.get('poll', 1.))), **kw)
 
     def cmd(s, t): return s.cmds.get(t.role or ('verifier' if t.kind == 'verify' else 'implementer')) or s.cmds.get('default')
@@ -51,7 +52,15 @@ class Runner:
         idle = {r.id for r in s.hive.db.q("SELECT id FROM agents WHERE state='idle'")}
         return len([j for j in s.jobs if j not in idle]) >= s.cap or len(s.jobs) >= s.cap*(s.hive.cfg.depth+2)
 
+    def beat(s, on=True):
+        if on and now()-s.beaten < 10: return
+        s.beaten = on and now()
+        with s.hive.db.tx() as c:
+            if on: c.execute('INSERT OR REPLACE INTO meta VALUES(?,?)', ('runner', dumps({'roles': sorted(s.cmds), 'pid': os.getpid(), 'ts': now()})))
+            else: c.execute("DELETE FROM meta WHERE key='runner'")
+
     def step(s):
+        s.beat()
         s.reap()
         for a in s.pend():
             if s.full(): return
@@ -64,7 +73,7 @@ class Runner:
             except Err as e: s.say(f'could not start t{t.id}: {e}')
 
     def launch(s, t):
-        d = s.op.dispatch(t.id, budget=min(4, s.op.agent.budget) if t.kind == 'compose' else 0)
+        d = s.op.dispatch(t.id, budget=min(s.budget, s.op.agent.budget) if s.hive.roles.get(t.role or 'implementer').caps & {'fork'} else 0)
         s.start(s.hive.agents.named(d['agent']), t, d['prompt'], d['role'], s.cmd(t))
 
     def start(s, a, t, prompt, role, cmd):
@@ -125,6 +134,7 @@ class Runner:
         except KeyboardInterrupt:
             s.say('interrupted; stopping agents')
             s.stop()
+        finally: s.beat(False)
         return {'counts': s.hive.tasks.counts(), 'stuck': s.stuck()}
 
     def stop(s):

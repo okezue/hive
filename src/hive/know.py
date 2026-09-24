@@ -4,6 +4,7 @@ from pathlib import Path
 
 from .db import LIB, Db
 from .err import Bad, Denied, Missing
+from .tasks import SETTLED, TERMINAL
 from .util import J, ago, clip, dumps, line, now, pid
 
 KINDS = ('fact', 'result', 'decision', 'problem', 'method', 'verdict')
@@ -109,21 +110,30 @@ class Know:
 
     def done(s, c, a, t, state, result):
         owner = a and a.id if t.kind == 'verify' else t.owner
-        if state != 'done' or t.kind in ('compose', 'distill') or s.synth(c, t, owner): return
-        if owner and (result or '').strip():
+        if t.kind in ('compose', 'distill') or s.synth(c, t, owner): return
+        if state == 'done' and owner and (result or '').strip():
             s.put(c, owner, clip(result, 4000), 'verdict' if t.kind == 'verify' else 'result', [f't{t.checks or t.id}'], [],
                   .8 if t.kind == 'verify' else .7, t.checks or t.id)
-        if not s.auto or t.kind != 'work' or not t.owner: return
-        subs = c.execute("SELECT owner FROM tasks WHERE parent=? AND kind!='verify' AND state='done'", (t.id,)).fetchall()
-        if len(subs) >= s.min and (n := s.lca([t.owner, *[r.owner for r in subs]])): s.enqueue(c, 'compose', n)
-        p = c.execute('SELECT parent FROM agents WHERE id=?', (t.owner,)).fetchone().parent
-        if p and (kids := c.execute("SELECT t.state FROM agents a JOIN tasks t ON t.id=a.deleg WHERE a.parent=? AND a.role NOT IN ('composer','distiller')",
-                                    (p,)).fetchall()) and all(k.state in ('done', 'failed', 'cancelled', 'blocked') for k in kids) \
-                and sum(k.state == 'done' for k in kids) >= s.min:
-            s.enqueue(c, 'compose', p)
+        if not s.auto: return
+        if t.owner and t.kind == 'work' and state == 'done' and len(subs := c.execute(
+                "SELECT owner FROM tasks WHERE parent=? AND kind!='verify' AND state='done'", (t.id,)).fetchall()) >= s.min \
+                and (n := s.lca([t.owner, *[r.owner for r in subs]])): s.enqueue(c, 'compose', n)
+        for p in {t.owner and c.execute('SELECT parent FROM agents WHERE id=?', (t.owner,)).fetchone().parent, t.creator} - {None}:
+            if s.settled(c, p): s.enqueue(c, 'compose', p)
+
+    def settled(s, c, p):
+        ks = c.execute(f"SELECT a.id,t.id tid,t.state,t.creator FROM agents a JOIN tasks t ON t.id=a.deleg WHERE a.parent=? AND a.role NOT IN ({qs(SYNTH)})",
+                       (p, *SYNTH)).fetchall()
+        if sum(k.state == 'done' for k in ks) < s.min or any(k.state not in SETTLED for k in ks): return False
+        who, ts = list({p, *(k.id for k in ks), *(k.creator for k in ks if k.creator)}), [k.tid for k in ks]
+        return not c.execute(f"SELECT 1 FROM tasks WHERE state NOT IN ({qs(SETTLED)}) AND kind NOT IN ('compose','distill') "
+                             f"AND (creator IN ({qs(who)}) OR checks IN ({qs(ts)})) LIMIT 1", [*SETTLED, *who, *ts]).fetchone()
 
     def staffed(s, c, role):
-        if c.execute("SELECT 1 FROM agents WHERE role=? AND state!='left'", (role,)).fetchone(): return True
+        if c.execute(f"SELECT 1 FROM agents a LEFT JOIN tasks t ON t.id=a.deleg WHERE a.role=? AND a.state!='left' AND a.seen>? "
+                     f"AND (t.id IS NULL OR t.state NOT IN ({qs(TERMINAL)}))", (role, now()-s.h.cfg.stale, *TERMINAL)).fetchone(): return True
+        if (r := c.execute("SELECT val FROM meta WHERE key='runner'").fetchone()) and now()-(m := J(r.val))['ts'] < max(60, 5*s.h.cfg.runner.get('poll', 1)) \
+                and {role, 'default'} & set(m['roles']): return True
         rs = s.h.cfg.runner.get('roles', {})
         return bool(rs.get(role, {}).get('command') or rs.get('default', {}).get('command'))
 
@@ -145,7 +155,7 @@ class Know:
 
     def scan(s, root):
         ids = s.under(root)
-        rows = s.h.db.q(f'SELECT id,parent,name,depth FROM agents WHERE id IN ({qs(ids)})', ids)
+        rows = s.h.db.q(f'SELECT id,parent,name,depth,role FROM agents WHERE id IN ({qs(ids)})', ids)
         kids, fs = defaultdict(list), defaultdict(list)
         for r in rows:
             if r.id != root: kids[r.parent].append(r.id)
@@ -162,7 +172,9 @@ class Know:
             return got, who
 
         walk(root)
-        return {r.id: r for r in rows}, kids, comps, sub, by
+        rs = {r.id: r for r in rows}
+        for x in kids: kids[x] = [k for k in kids[x] if sub[k] or k in comps or rs[k].role not in SYNTH]
+        return rs, kids, comps, sub, by
 
     def gap(s, cp, fs): return [f for f in fs if f not in set(J(cp.covers, []))] if cp else list(fs)
 

@@ -127,6 +127,36 @@ def testComposeTriggersFollowTheTree(hive):
     assert [t['title'] for t in boss.tasks('ready')['tasks'] if t['kind'] == 'compose'] == ["Compose what boss's subtree found"]
 
 
+def testComposeWaitsForTheWholePlanAndCountsFailures(hive):
+    boss = hive.join('boss', 'coordinator')
+    hive.join('cmp', 'composer')
+    kids = [hive.sess(boss.spawn(f'part {i}', 'researcher')['token']) for i in range(3)]
+    [later] = boss.plan([{'title': 'undelegated follow-up'}])['created']
+    comps = lambda: [t['title'] for t in boss.tasks('ready')['tasks'] if t['kind'] == 'compose']
+    for k in kids[:2]:
+        k.take()
+        k.done(k.agent.deleg, 'part done')
+    kids[2].take()
+    kids[2].fail(kids[2].agent.deleg, 'dead end')
+    assert comps() == []
+    boss.cancel(later['id'], 'not needed')
+    assert comps() == ["Compose what boss's subtree found"]
+
+
+def testFinishedOrSilentAgentsDoNotStaff(hive):
+    boss = hive.join('boss', 'coordinator')
+    cmp = hive.sess(boss.spawn('compose the first pass', 'composer')['token'])
+    cmp.take()
+    staffed = lambda: hive.know.staffed(hive.db.conn(), 'composer')
+    assert staffed()
+    cmp.done(cmp.agent.deleg, 'composed')
+    assert not staffed()
+    hive.join('spare', 'composer')
+    assert staffed()
+    with hive.db.tx() as c: c.execute("UPDATE agents SET seen=0 WHERE name='spare'")
+    assert not staffed()
+
+
 def testLoneRootGetsNoDistillTask(hive):
     hive.join('dis', 'distiller')
     v, cmp = hive.join('solo', 'researcher'), hive.join('cmp', 'composer')
@@ -147,3 +177,19 @@ async def testHttpNeedsKeyForSynthesisRoles(hive):
     from hive.srv import build
     async with Client(build(hive, strict=True)) as c:
         for r in ('composer', 'distiller'): assert (await c.call_tool('join', {'name': f'x{r}', 'role': r})).is_error
+
+
+def testRunnerCommandsCountAsStaffing(hive):
+    import sys
+
+    from hive.run import Runner
+    boss = hive.join('boss', 'coordinator')
+    kids = [hive.sess(boss.spawn(f'part {i}', 'researcher', launch='none')['token']) for i in range(2)]
+    r = Runner(hive, {'default': [sys.executable, '-c', 'pass']})
+    r.beat()
+    for k in kids:
+        k.take()
+        k.done(k.agent.deleg, 'part done')
+    assert [t['kind'] for t in boss.tasks('ready')['tasks']] == ['compose']
+    r.beat(False)
+    assert hive.db.one("SELECT 1 FROM meta WHERE key='runner'") is None

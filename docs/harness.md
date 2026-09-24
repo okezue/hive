@@ -42,7 +42,7 @@ command = "hive"
 args = ["mcp", "--agent", "grok-1", "--role", "implementer"]
 ```
 
-Grok Build reads the Claude Code hook file above, or put the same JSON in `.grok/hooks/hive.json`; the `Edit|Write` matcher also matches Grok's `search_replace`. Grok truncates large MCP results (20,000 bytes by default), so read big files in ranges with `read(path, start, end)`.
+Grok Build reads the Claude Code hook file above, or put the same JSON in `.grok/hooks/hive.json`; the `Edit|Write` matcher also matches Grok's `search_replace`. Grok loads project hooks only inside a git repository, so run `git init` in a scratch workspace or the hooks silently never fire (`grok inspect` lists what it loaded). Headless runs (`grok -p`) need a trusted folder (`--trust`) or `GROK_FOLDER_TRUST=0` before they read the project's `.grok/config.toml`. Grok truncates large MCP results (20,000 bytes by default), so read big files in ranges with `read(path, start, end)`.
 
 ## Codex
 

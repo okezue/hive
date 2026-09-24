@@ -203,5 +203,6 @@ def testRunnerReleasesEveryTaskItsAgentHeld(hive, tmp_path):
         "import os\nfrom hive import Hive\nh = Hive.open(os.environ['HIVE_DB'], os.environ['HIVE_ROOT'])\n"
         "me, t = h.sess(os.environ['HIVE_AGENT_TOKEN']), os.environ['HIVE_TASK']\nme.take(t)\nme.done(t, 'ok')\nme.take()\n")
     hive.op().plan([{'title': 'first'}, {'title': 'second'}])
+    (hive.cfg.dir/'config.toml').write_text('[insights]\nauto = false\n')
     r = Runner(hive, {'default': [sys.executable, str(p)]}, cap=1, poll=.05).run(60)
     assert r['counts'] == {'done': 2} and 'exited with code 0' in hive.tasks.get(2).notes[0]['failed']

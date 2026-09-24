@@ -27,6 +27,7 @@ global = "~/.hive/insights.db"   # library for insights saved with scope "global
 [runner]
 max = 3
 poll = 1.0
+budget = 4           # budget each dispatched agent gets for spawning helpers; it returns when the agent exits
 
 # Agent command per role ("default" for any). Placeholders: {prompt} {promptFile} {task} {agent} {token} {role} {db} {root} {mcp}
 # [runner.roles.default]

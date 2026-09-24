@@ -40,7 +40,9 @@ def testDependenciesAndConcurrency(hive, root, agent):
     op.plan([{'key': 'a', 'title': 'a'}, {'key': 'b', 'title': 'b'}, {'key': 'c', 'title': 'c', 'after': ['a', 'b'], 'verify': True}])
     lines = []
     r = Runner(hive, {'default': agent}, cap=2, poll=.05, say=lines.append, env={'NAP': '.4'}).run(60)
-    assert r['stuck'] == {} and r['counts'] == {'done': 4}
+    assert r['stuck'] == {} and r['counts'] == {'done': 5}
+    ks = {t.kind: t for t in hive.db.q('SELECT * FROM tasks')}
+    assert [t.kind for t in hive.db.q('SELECT kind FROM tasks ORDER BY id')] == ['work']*3+['verify', 'compose'] and ks['compose'].ts >= ks['verify'].doneAt
     ev = {(k, n): t for k, n, t in events(root)}
     assert ev['start', 'b'] < ev['end', 'a'] and ev['start', 'a'] < ev['end', 'b']
     assert ev['start', 'c'] > max(ev['end', 'a'], ev['end', 'b'])

@@ -169,6 +169,7 @@ def putMcp(n, scope, root, on=True, dry=False):
         kv = {'command': cmd[0], 'args': cmd[1:], 'startup_timeout_sec': 60} | ({'tool_timeout_sec': 1000} if n == 'codex' else {}) | \
             ({'env': e} if (e := extra()) else {})
         was = readT(p)
+        if (was.get('mcp_servers', {}).get('hive') == kv) if on else 'hive' not in was.get('mcp_servers', {}): return out
         text = tomlPut(p.read_text() if p.exists() else '', 'mcp_servers.hive', kv if on else None)
         try: now_ = tomllib.loads(text)
         except tomllib.TOMLDecodeError: now_ = None

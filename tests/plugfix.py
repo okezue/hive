@@ -313,3 +313,11 @@ def testDoctorSeesAUserInstallFromTheHomeFolder(home):
     assert installed('grok', home) == 'user'
     d = doctor('grok', home, native=False)
     assert d['installed'] == 'user' and d['hooks'] == 'user' and 'trust' not in d and d['ok'], d
+
+
+def testReinstallLeavesAnUnchangedConfigAlone(home, root):
+    install('grok', 'user', root, hooks=False)
+    c = home/'.grok'/'config.toml'
+    c.write_text(c.read_text() + '\n[ui]\ntheme = "night"\n')
+    before, baks = c.read_text(), set((home/'.grok').glob('config.toml.bak-*'))
+    assert install('grok', 'user', root, hooks=False) == [] and c.read_text() == before and set((home/'.grok').glob('config.toml.bak-*')) == baks

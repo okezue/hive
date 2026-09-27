@@ -1,7 +1,11 @@
+import os
+
 import pytest
 
 from hive import Hive
 from hive.summ import Extract, Summ
+
+AGENTS = ('grok', 'claude', 'codex', 'gemini', 'cursor-agent', 'opencode')
 
 
 @pytest.fixture
@@ -14,6 +18,9 @@ def root(tmp_path):
 def lib(monkeypatch, tmp_path):
     monkeypatch.setenv('HIVE_GLOBAL', str(tmp_path/'global'/'insights.db'))
     monkeypatch.setenv('HIVE_HOME', str(tmp_path/'home'))
+    monkeypatch.setenv('HIVE_AUTORUN', '0')
+    monkeypatch.setenv('PATH', os.pathsep.join(d for d in os.environ.get('PATH', '').split(os.pathsep)
+                                               if not any(os.path.exists(os.path.join(d, x)) for x in AGENTS)))
 
 
 @pytest.fixture

@@ -63,9 +63,11 @@ class Adopt:
 
 
 class Runner:
-    def __init__(s, hive, cmds, cap=3, poll=1., op=None, say=None, env=None, watch=False, budget=4, **pol):
+    def __init__(s, hive, cmds, cap=3, poll=1., op=None, say=None, env=None, watch=False, budget=4, handed=False, linger=0., **pol):
         if bad := set(pol)-set(POL): raise TypeError(f"unknown runner settings: {', '.join(sorted(bad))}")
         s.hive, s.cap, s.poll, s.env, s.watch, s.budget, s.hn, s.ok, s.warned = hive, max(1, cap), poll, env or {}, watch, budget, {}, set(), set()
+        s.handed, s.linger = handed, linger
+        s.picked = not cmds
         if not cmds and (f := found(hive.cfg)):
             cmds = {'default': f[0]}
             (say or (lambda t: None))(f'no runner command is configured, so agents run in {f[0]}')
@@ -97,13 +99,17 @@ class Runner:
         return c
 
     def cmd(s, t):
-        if h := t.get('harness'):
+        own = s.cmds.get(t.role or ('verifier' if t.kind == 'verify' else 'implementer')) or s.cmds.get('default')
+        if (h := t.get('harness') or '').startswith('~'):
+            if own and not s.picked: return own
+            h = h[1:]
+        if h:
             try: return s.cmds.setdefault(f'@{h}', [s.entry(h)])
             except (Err, ValueError) as e:
                 if h not in s.warned: s.say(f'cannot run t{t.id} in {h}: {e}')
                 s.warned.add(h)
                 return None
-        return s.cmds.get(t.role or ('verifier' if t.kind == 'verify' else 'implementer')) or s.cmds.get('default')
+        return own
 
     def key(s, cm): return s.keys.get(tuple(cm)) or label(cm)
 
@@ -120,8 +126,8 @@ class Runner:
             s.save()
 
     def ready(s):
-        return [t for t in map(s.hive.tasks._d, s.hive.db.q("SELECT * FROM tasks WHERE state='ready' AND owner IS NULL ORDER BY prio DESC,id"))
-                if s.cmd(t)]
+        q = "SELECT * FROM tasks WHERE state='ready' AND owner IS NULL" + (' AND run=1' if s.handed else '') + ' ORDER BY prio DESC,id'
+        return [t for t in map(s.hive.tasks._d, s.hive.db.q(q)) if s.cmd(t)]
 
     def mine(s, st):
         return s.hive.db.q(f"SELECT a.*,t.state tstate,t.owner towner FROM agents a JOIN tasks t ON t.id=a.deleg WHERE a.state IN ({','.join('?'*len(st))}) "
@@ -201,7 +207,7 @@ class Runner:
         except Exception as e: s.say(f'could not {what}: {type(e).__name__}: {e}')
 
     def launch(s, t, cmd, k):
-        d = s.op.dispatch(t.id, budget=min(s.budget, s.op.agent.budget) if s.hive.roles.get(t.role or 'implementer').caps & {'fork'} else 0)
+        d = s.op._dispatch(t.id, budget=min(s.budget, s.op.agent.budget) if s.hive.roles.get(t.role or 'implementer').caps & {'fork'} else 0)
         s.start(s.hive.agents.named(d['agent']), s.hive.tasks.get(t.id), d['prompt'], d['role'], cmd, k)
 
     def start(s, a, t, prompt, role, cmd, k):
@@ -407,9 +413,16 @@ class Runner:
         try:
             s.recover()
             th.start()
+            quiet = None
             while True:
                 s.step()
-                if not s.watch and not s.jobs and not s.waiting(): break
+                if not s.jobs and not s.waiting():
+                    if not s.watch: break
+                    quiet = quiet or time.monotonic()
+                    if s.linger and time.monotonic()-quiet > s.linger:
+                        s.say(f'nothing to do for {dur(s.linger)}; stopping')
+                        break
+                else: quiet = None
                 if end and time.monotonic() > end:
                     s.say('timeout; stopping agents')
                     s.stop()

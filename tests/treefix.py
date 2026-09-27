@@ -38,7 +38,7 @@ def testNoNegativeFunds(hive, lead):
 
 
 def testNarrowingSurvivesDispatchAssignAndRejoin(hive, lead):
-    sub = hive.sess(lead.spawn('manage a slice', 'coordinator', grants=['fork', 'read', 'send', 'spawn', 'plan'])['token'])
+    sub = hive.sess(lead.spawn('manage a slice', 'coordinator', grants=['fork', 'read', 'send', 'spawn', 'plan'], launch='runner')['token'])
     assert sorted(sub.me()['caps']) == ['fork', 'plan', 'read', 'send', 'spawn']
     [t] = lead.plan([{'title': 'needs a coordinator', 'role': 'coordinator'}])['created']
     got = hive.sess(sub.dispatch(t['id'])['token'])

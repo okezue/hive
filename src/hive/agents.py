@@ -56,6 +56,13 @@ class Agents:
 
     def names(s): return {r.id: r.name for r in s.db.q('SELECT id,name FROM agents')}
 
+    def hosted(s, a): return a.launch == 'host' or (not a.launch and bool(a.deleg) and not a.pid)
+
+    def home(s, a):
+        for i in s.above(a.id):
+            if h := s.get(i).get('harness'): return h
+        return ''
+
     def heir(s, c, aid):
         for i in s.above(aid):
             if (r := c.execute('SELECT * FROM agents WHERE id=?', (i,)).fetchone()).state != 'left': return r

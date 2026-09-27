@@ -267,7 +267,58 @@ def plug(c):
       'alice and bob recorded findings under their own names')
 
 
-SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover, 'plug': plug}
+def ag_by(ag, i): return next(a for a in ag.values() if a.id == i)
+
+
+def depth(c):
+    d = BASE/'depth'
+    shutil.rmtree(d, ignore_errors=True)
+    (d/'out').mkdir(parents=True)
+    (d/'a.md').write_text('# Harbor\nHarbor is a queue service. It keeps messages for 14 days, retries failed deliveries 5 times with '
+                          'exponential backoff starting at 2 seconds, and shards topics across 12 partitions by key hash.\n')
+    (d/'b.md').write_text('# Lantern\nLantern is a metrics store. It keeps raw samples for 48 hours, then downsamples to 1-minute '
+                          'averages kept for 90 days, and answers queries through a SQL-like language called LQL.\n')
+    subprocess.run(['git', 'init', '-q'], cwd=d, check=True)
+    e = env(d, HIVE_HOME=str(d/'home'))
+    bare = {k: v for k, v in e.items() if not k.startswith('HIVE_') or k in ('HIVE_HOME', 'HIVE_GLOBAL')}
+    r = subprocess.run([HIVE, 'install', 'grok', '--project'], cwd=d, env=e, capture_output=True, text=True, timeout=300)
+    c(r.returncode == 0 and 'grok: ok' in r.stdout, 'hive install grok --project works')
+    subprocess.run([HIVE, 'init'], cwd=d, env=e, capture_output=True, check=True)
+    with open(d/'.hive'/'config.toml', 'a') as f:
+        f.write(f"\n[harness.grok]\nrun = {json.dumps(grok(40, file='{promptFile}'))}\n")
+    subprocess.run(['sed', '-i', '', 's/^timeout = 7200 .*/timeout = 1500/', str(d/'.hive'/'config.toml')], check=True)
+    with open(d/'.hive'/'config.toml') as f: t = f.read()
+    (d/'.hive'/'config.toml').write_text(t.replace('[runner]\n', '[runner]\nlinger = 60\n', 1))
+    ask = ('Use the hive MCP server: join as "lead" with the coordinator role. Organize this as a small team through Hive. One researcher '
+           'summarizes a.md and another summarizes b.md, and the researcher for a.md should get its own helper to fact-check its summary '
+           'against a.md before it finishes. Wait for all of them through Hive, then write both summaries to SUMMARY.md and reply DONE.')
+    t0 = time.time()
+    p = subprocess.run([x.replace('{root}', str(d)) for x in grok(80, ask)], cwd=d, env=bare, capture_output=True, text=True, timeout=3000)
+    (d/'out'/'lead.txt').write_text(p.stdout + '\n' + p.stderr)
+    print(f'  lead finished in {time.time()-t0:.0f}s (exit {p.returncode})', flush=True)
+    h = Hive.open(d/'.hive'/'hive.db', d)
+    ag = {a.name: a for a in h.agents.all(gone=True)}
+    lead = ag.get('lead')
+    kids = [a for a in ag.values() if lead and a.parent == lead.id and a.deleg]
+    grand = [a for a in ag.values() if a.parent in {k.id for k in kids}]
+    log = d/'.hive'/'run'/'runner.log'
+    end = time.time()+180
+    while (not log.exists() or 'stopping' not in log.read_text()) and time.time() < end: time.sleep(5)
+    c(lead and lead.harness == 'grok', 'the coordinator joined the hive by itself from a plain grok session')
+    c(len(kids) >= 2 and all(k.calls > 0 and h.tasks.get(k.deleg).state == 'done' for k in kids),
+      f"the coordinator started its researchers ({', '.join(f'{k.name} as {k.launch}' for k in kids)}), and they worked through Hive and finished")
+    c(grand and all(g.launch == 'runner' and g.pid and h.tasks.get(g.deleg).state == 'done' for g in grand),
+      "the a.md researcher's fact-checker ran as its own grok process through the runner")
+    c(not [a.name for a in ag.values() if a.launch == 'host' and a.parent and ag_by(ag, a.parent).launch == 'host'],
+      'no subagent was asked to start a subagent of its own')
+    c(grand and all((h.tasks.get(g.deleg).harness or '').lstrip('~') == 'grok' for g in grand), "the fact-checker ran in the session's harness")
+    c(log.exists() and 'started' in log.read_text() and 'stopping' in log.read_text(), 'Hive started a runner by itself and it stopped once idle')
+    c((d/'SUMMARY.md').exists() and '14 days' in (d/'SUMMARY.md').read_text() and '48 hours' in (d/'SUMMARY.md').read_text(),
+      'the coordinator gathered both summaries into SUMMARY.md')
+    c(not [a.name for a in ag.values() if a.state == 'pending' and not a.calls], 'no helper was left unstarted')
+
+
+SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover, 'plug': plug, 'depth': depth}
 
 
 def main():

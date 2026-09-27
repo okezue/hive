@@ -5,7 +5,8 @@ PROTOCOL = '''How to work in the hive (MCP server "hive"):
 - Shared files: `read`, then `edit` or `write`; after changing a file with another tool, call `sync`. Changes by others to other parts of a file merge automatically and you are told what changed. If your change overlaps someone else's, Hive opens a merge request: agree with that agent in its thread, then `propose` and `respond`.
 - Talk with `send` (mode queue, steer, or interrupt when it cannot wait), `ask` (waits for the answer), `share` (a file range, context entry, task, or message), and `handoff` (pass on your context).
 - Stay aware with `overview`, `digest`, and `watch` (view live, window, or summary). The agents form a tree: `tree`, `node`, `walk`, `path`, `find`, and `brief` navigate it one neighborhood at a time.
-- When part of your work splits off cleanly, `spawn` a helper with a goal and a deliverable, then `gather` its result. Escalate decisions you cannot make with `escalate`.
+- When part of your work splits off cleanly, `spawn` a helper with a goal and a deliverable, then `gather` its result. From a top-level session, spawn returns a prompt: start a subagent with it right away. A subagent cannot start subagents of its own, so when you are one, Hive starts your helpers as their own processes through its runner; choose that yourself with launch="runner" for long work or work that needs helpers of its own. Escalate decisions you cannot make with `escalate`.
+- Hive only hears from you when you call it, and it can only pass you messages and interrupts then. Post `progress` every few steps, look at `inbox` when you pause, and always finish with `done` or `fail`; an agent that goes quiet looks stuck to everyone else.
 - Record what you learn as you go with `note` (facts, decisions, problems, methods; `against:f12` in refs marks a contradiction). Composers combine findings up the tree and distillers keep the insights; `recall` searches insights saved from earlier work.
 - Post `progress` at milestones and publish findings with `put`. If you are stopped by a rate limit, timeout, or crash, Hive restarts you with a brief built from these records, so they are what carries your work over.
 - Stay within your role and your task's paths; ask the agent whose job it is when something is outside them.'''
@@ -20,8 +21,12 @@ def brief(n, role, charter, tok=None):
 def tipText(tips): return 'Insights saved from earlier work that may apply (weigh them if they help or mislead):\n' + '\n'.join(f'- {x}' for x in tips)
 
 
-def task(b, t, deps=None, tips=None):
-    parts = [b, f"Your task: {t['id']} {t['title']}"] + ([t['about']] if t.get('about') else [])
+SUB = ('You run as a subagent inside another session. You cannot start subagents yourself, so helpers you spawn run as their own processes '
+       'through Hive\'s runner, and Hive reaches you only through your own Hive calls: keep calling progress as you work.')
+
+
+def task(b, t, deps=None, tips=None, sub=False):
+    parts = [b, f"Your task: {t['id']} {t['title']}"] + ([t['about']] if t.get('about') else []) + ([SUB] if sub else [])
     if t.get('paths'): parts.append('Work only in: ' + ', '.join(t['paths']))
     if deps:
         parts.append('Results of the tasks this one depends on:\n' + '\n'.join(
@@ -34,13 +39,14 @@ def task(b, t, deps=None, tips=None):
     return '\n\n'.join(parts)
 
 
-def lineage(b, chain, t, budget, room, grants=None, tips=None):
+def lineage(b, chain, t, budget, room, grants=None, tips=None, sub=False):
     why = '\n'.join(f"{'  '*i}{x.name} ({x.role})" + (f': {x.goal}' if x.goal else '') for i, x in enumerate(chain))
     parts = [b, f'Why you exist (root first):\n{why}', f'Your delegation, t{t.id}:\n{t.about}']
     parts += [f'Deliver: {t.deliver}'] if t.deliver else []
     parts += ['Work only in: ' + ', '.join(t.paths)] if t.paths else []
     parts += ['Your capabilities are narrowed to: ' + ', '.join(grants)] if grants else []
     parts += [tipText(tips)] if tips else []
+    parts += [SUB] if sub else []
     parts.append(f"You may spawn helpers below you (budget {budget}, {room} more level(s)); gather collects their results, and you cannot finish "
                  f"t{t.id} while they are unsettled. If you are blocked, escalate to your keeper instead of guessing.")
     parts.append(f"Start with take('t{t.id}'). Finish with done('t{t.id}', result=...) covering what the delivery asks for; if you cannot, "

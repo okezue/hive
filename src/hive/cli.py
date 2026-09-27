@@ -158,8 +158,8 @@ def hook(a):
 
 def run(a):
     from .run import Runner
-    kw = {'say': lambda t: print('[run]', t, flush=True), 'watch': a.watch} | ({'cmds': {'default': a.command or a.harness}} if a.command or a.harness else {}) | \
-        ({'cap': a.max} if a.max else {})
+    kw = {'say': lambda t: print('[run]', t, flush=True), 'watch': a.watch, 'handed': a.handed, 'linger': a.linger or 0.} | \
+        ({'cmds': {'default': a.command or a.harness}} if a.command or a.harness else {}) | ({'cap': a.max} if a.max else {})
     r = Runner.fromCfg(opened(a, True), **kw).run(a.timeout)
     dump(r)
     return 1 if r['stuck'] or r.get('paused') else 0
@@ -296,7 +296,8 @@ def parser():
     cmd(merges, opt('id', nargs='?'), opt('--state', default='open'), who=True)
     cmd(hook, opt('event', choices=EVENTS), opt('--format', default='claude', choices=['claude', 'gemini', 'text']))
     cmd(run, opt('--max', type=int), opt('--timeout', type=float), opt('--watch', action='store_true'), opt('--harness'),
-        opt('--command', nargs=argparse.REMAINDER))
+        opt('--handed', action='store_true', help='only start helpers spawned or tasks dispatched with launch=runner'),
+        opt('--linger', type=float, help='with --watch, stop after this many idle seconds'), opt('--command', nargs=argparse.REMAINDER))
     cmd(tree, opt('of', nargs='?'), opt('--depth', type=int, default=2), who=True)
     cmd(insights, opt('query', nargs='*'), opt('--limit', type=int, default=20), who=True)
     cmd(retry, opt('id', nargs='?'), opt('--note', default=''), who=True)

@@ -15,7 +15,11 @@ from .util import GROUPS
 INFO = ('Hive connects you with the other agents in this session. Start with join (or me if your identity is preset) to learn your '
         'role, token, and who else is here. Responses may carry interrupts (handle first, then ack), messages, a queued count, and '
         'updates on what you follow. Change shared files with edit/write (or sync after another editor) so concurrent changes merge; '
-        'overlapping changes open a merge request you settle with the other author. Stay in your role.')
+        'overlapping changes open a merge request you settle with the other author. Stay in your role. '
+        'Hive hears from you only when you call it: post progress every few steps and finish tasks with done or fail. '
+        'To split work, spawn helpers (or dispatch planned tasks). A top-level session starts them with its own subagent tool, right away. '
+        'Subagents cannot start subagents, so a subagent\'s helpers run as their own processes through Hive\'s runner, which Hive starts '
+        'when needed; use launch="runner" yourself for long work, many tasks, or helpers that will need helpers of their own.')
 
 DOCS = {
     'join': 'Join the hive. Returns your token, your charter, how to work here, and who else is present.',
@@ -62,10 +66,15 @@ DOCS = {
     'fail': 'Give up on a task; retry puts it back for another agent, otherwise dependents are blocked.',
     'verify': 'Approve or reject work under review with evidence (verifier roles, never your own work).',
     'cancel': 'Cancel a task you created (coordinators: any); dependents are blocked.',
-    'dispatch': 'Coordinators: create an agent for a ready task and get the prompt to start it with.',
+    'dispatch': 'Coordinators: hand a ready task to an agent. From a top-level session this creates the agent and returns the prompt to start '
+                'it with in your own subagent tool; start it right away, and dispatch only as many as you are starting now, since an unstarted '
+                'agent holds its task. launch="runner" (automatic when you are a subagent) hands the task to Hive\'s runner instead, which starts '
+                'an agent for it as its own process; prefer that for many tasks or long ones.',
     'spawn': "Spawn a helper below you with a goal and a deliverable. It gets its own task under yours, a slice of your budget, capabilities "
-             "no wider than yours, and can spawn helpers of its own. launch 'host' returns a prompt for your own subagent tool, 'runner' has "
-             "Hive start it as a separate process, 'none' only registers it.",
+             "no wider than yours, and can spawn helpers of its own. launch 'auto' (default) returns a prompt for your own subagent tool when "
+             "you are a top-level session, and has Hive's runner start the helper as its own process when you are a subagent (subagents cannot "
+             "start subagents). 'host' and 'runner' choose explicitly; runner helpers run in your session's harness unless harness says "
+             "otherwise, and Hive starts a runner if none is running. 'none' only registers the helper.",
     'gather': 'Wait for your children (or the listed agents or tasks) to settle and collect their results; any returns at the first.',
     'tree': 'Show the agent tree around one node (default: your cursor, else you) to a depth, with +N more for wide levels.',
     'node': 'One node in full: goal, task, budget, keeper, children, an exact rollup of its subtree, and which descendant needs attention.',
@@ -135,7 +144,8 @@ ARGS = {
     'spawn.role': 'The child role; defaults to yours. Its capabilities are cut down to what you have',
     'spawn.grants': 'Narrow the child to these capabilities (a subset of yours and its role)',
     'spawn.deliver': 'What the child must hand back, e.g. "a patch to src/x.py and passing tests"',
-    'spawn.launch': 'host, runner, or none',
+    'spawn.launch': 'auto (default), host, runner, or none',
+    'dispatch.launch': 'auto (default), host, or runner',
     'gather.of': 'Agent names or task ids; default all your children',
     'gather.budget': 'Maximum length of returned results in tokens',
     'tree.depth': 'Levels below the node to show',

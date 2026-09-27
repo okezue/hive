@@ -1,8 +1,8 @@
 from .log import match
 from .mail import show
-from .util import an, line
+from .util import ago, an, line, now
 
-CAP, SCAN = 8, 500
+CAP, SCAN, LATE, QUIET = 8, 500, 600, 900
 
 
 class Notice:
@@ -26,9 +26,28 @@ class Notice:
         if mrs := [f'mr{m.id}' for m in s.mrs.involving(a.id) if a.id in s.mrs.waiting(m)]: out['mergesWaitingOnYou'] = mrs
         if iss := s.log.db.q("SELECT id FROM issues WHERE holder=? AND state='open' ORDER BY id", (a.id,)):
             out['issuesWaitingOnYou'] = [f'i{x.id}' for x in iss]
+        if eat and (h := s.helpers(a)): out['helpersNeedYou'] = h
         if s.every and a.calls and a.calls % s.every == 0:
             r = s.roles.get(a.role)
             out['roleReminder'] = f"You are {a.name}, {an(r.name)}. {r.charter}" + (f' Your task is t{a.task}.' if a.task else '')
+        return out
+
+    def helpers(s, a):
+        t, db = now(), s.log.db
+        if (s.log.cur(a.id, 'helpers') or 0) > t-LATE: return None
+        rows = db.q("SELECT k.name,k.state,k.calls,k.joined,k.seen,k.launch FROM agents k JOIN tasks x ON x.id=k.deleg WHERE k.parent=? "
+                    "AND k.state!='left' AND x.state IN ('ready','running')", (a.id,))
+        late = [r for r in rows if r.state == 'pending' and not r.calls and t-r.joined > LATE]
+        quiet = [r.name for r in rows if r.calls and r.state != 'idle' and t-r.seen > QUIET]
+        if not late and not quiet: return None
+        with db.tx() as c: s.log.setCur(c, a.id, 'helpers', int(t))
+        out = []
+        if hs := [f'{r.name} ({ago(r.joined)})' for r in late if r.launch != 'runner']:
+            out.append(f"{', '.join(hs)} never started and hold their tasks: start each with the prompt spawn or dispatch gave you, or cancel its "
+                       "task and spawn again with launch=\"runner\" (a subagent cannot start subagents).")
+        if rs := [f'{r.name} ({ago(r.joined)})' for r in late if r.launch == 'runner']:
+            out.append(f"{', '.join(rs)} still wait for Hive's runner: check faults, or ask whoever runs this hive to start hive run.")
+        if quiet: out.append(f"{', '.join(quiet)} hold running tasks but have not called Hive for over {QUIET//60} minutes: ask them for progress.")
         return out
 
     def scan(s, a, names, stop=False):

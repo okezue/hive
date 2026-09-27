@@ -1,3 +1,4 @@
+import os, subprocess, sys, threading
 from contextlib import suppress
 from pathlib import Path
 
@@ -39,7 +40,7 @@ class Hive:
         s.tree = Tree(s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, cfg)
         s.know = Know(s)
         s.faults = Faults(s)
-        s.tree.tips = s.know.tips
+        s.tree.tips, s.tree.run = s.know.tips, s.autorun
         if (d := cfg.dir).name == '.hive' and not (d/'.gitignore').exists():
             with suppress(OSError): (d/'.gitignore').write_text(IGNORE)
         with suppress(Exception):
@@ -61,6 +62,25 @@ class Hive:
         try: a = s.agents.named(name)
         except Missing: a = None
         return Sess(s, a.id) if a and a.state != 'left' else s.join(name, 'coordinator', about='the human at the CLI')
+
+    def autorun(s):
+        from .harness import found
+        from .reg import alive
+        from .util import J, dumps, now
+        if os.environ.get('HIVE_AUTORUN', '1') == '0' or s.cfg.runner.get('auto', True) is False: return 'off'
+        if not (s.cfg.runner.get('roles') or found(s.cfg)): return 'none'
+        (d := s.cfg.dir/'run').mkdir(parents=True, exist_ok=True)
+        env = {k: v for k, v in os.environ.items() if k not in ('HIVE_AGENT', 'HIVE_AGENT_TOKEN', 'HIVE_ROLE', 'HIVE_TASK', 'HIVE_HARNESS', 'HIVE_WORKFLOW')}
+        with s.db.tx() as c:
+            if (r := c.execute("SELECT val FROM meta WHERE key='runner'").fetchone()) and now()-(m := J(r.val)).get('ts', 0) < 60 and alive(m.get('pid')):
+                return 'running'
+            with open(d/'runner.log', 'a') as log:
+                p = subprocess.Popen([sys.executable, '-m', 'hive', '--db', str(s.cfg.db), '--root', str(s.root), 'run', '--watch', '--handed', '--linger',
+                                      str(float(s.cfg.runner.get('linger', 600)))], cwd=s.root, env=env, stdin=subprocess.DEVNULL, stdout=log,
+                                     stderr=subprocess.STDOUT, start_new_session=True)
+            c.execute('INSERT OR REPLACE INTO meta VALUES(?,?)', ('runner', dumps({'roles': [], 'pid': p.pid, 'ts': now()})))
+        threading.Thread(target=p.wait, daemon=True).start()
+        return f'started (pid {p.pid})'
 
     def close(s):
         if s.tools._pool: s.tools._pool.forget()

@@ -14,7 +14,8 @@ class Aware:
         return me.wf if scope != 'session' and me.wf else None
 
     def who(s, a, names, me=None):
-        st = 'stale' if a.state in ('active', 'idle') and now()-a.seen > s.stale else a.state
+        st = 'stale' if a.state in ('active', 'idle') and now()-a.seen > s.stale else 'not started' if a.state == 'pending' and not a.calls and \
+            now()-a.joined > 600 else a.state
         out = {'name': a.name, 'role': a.role, 'state': st} | ({'harness': a.harness} if a.get('harness') else {})
         if me and a.id == me.id: out['you'] = True
         if a.status: out['status'] = a.status

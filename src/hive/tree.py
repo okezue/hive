@@ -6,7 +6,7 @@ from .prompt import brief as briefText, lineage as lineageText
 from .util import J, ago, an, dumps, line, now, pid, poll, toks
 
 SETTLED = ('done', 'failed', 'cancelled', 'blocked')
-LAUNCH = ('host', 'runner', 'none')
+LAUNCH = ('auto', 'host', 'runner', 'none')
 SUB = "WITH RECURSIVE sub(id,d) AS (SELECT ?,0 UNION ALL SELECT a.id,sub.d+1 FROM agents a JOIN sub ON a.parent=sub.id WHERE sub.d<64) "
 ROLLUP = SUB + """SELECT
  (SELECT json_group_object(state,n) FROM (SELECT state,COUNT(*) n FROM agents WHERE id IN (SELECT id FROM sub) GROUP BY state)) agents,
@@ -21,7 +21,7 @@ ROLLUP = SUB + """SELECT
 
 class Tree:
     def __init__(s, db, log, mail, agents, roles, tasks, summ, cfg):
-        s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, s.cfg, s.tips = db, log, mail, agents, roles, tasks, summ, cfg, None
+        s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, s.cfg, s.tips, s.run = db, log, mail, agents, roles, tasks, summ, cfg, None, None
         agents.left.append(s.gone)
 
     def at(s, me, of):
@@ -36,11 +36,14 @@ class Tree:
 
     def path(s, aid): return '/'.join(s.agents.names()[i] for i in reversed(s.agents.above(aid)))
 
-    def spawn(s, a, goal, role=None, name=None, budget=None, launch='host', grants=None, deliver='', paths=None, verify=False, harness=None):
+    def spawn(s, a, goal, role=None, name=None, budget=None, launch='auto', grants=None, deliver='', paths=None, verify=False, harness=None):
         s.roles.need(a, 'fork', 'spawn agents')
         role, cfg = role or a.role, s.cfg
         if not (goal or '').strip(): raise Bad('a child needs a goal: what it should achieve')
         if launch not in LAUNCH: raise Bad(f'launch is one of {", ".join(LAUNCH)}')
+        sub, asked = s.agents.hosted(a), launch
+        launch = 'runner' if harness and launch in ('auto', 'host') or sub and launch in ('auto', 'host') else 'host' if launch == 'auto' else launch
+        inh = not harness and launch == 'runner' and s.agents.home(a)
         if a.depth+1 > cfg.depth: raise Clash(f'{a.name} is at depth {a.depth}; the tree allows {cfg.depth} levels', 'do this yourself or escalate')
         mine, want = s.roles.caps(a), s.roles.get(role).caps
         if grants is not None and (bad := set(grants) - (mine & want)):
@@ -60,7 +63,7 @@ class Tree:
             n = name or next(x for x in (f'{base}{i}' for i in range(1, 10000)) if x not in taken)
             if name and name in taken: raise Clash(f'{name} is taken')
             kid = s.agents.join(n, role, s.agents.wfNames().get(a.wf), a.id, goal[:200])
-            t = s.tasks.delegate(c, a, kid, goal, deliver, role, paths, verify, harness)
+            t = s.tasks.delegate(c, a, kid, goal, deliver, role, paths, verify, harness or (inh and '~'+inh))
             c.execute("UPDATE agents SET budget=budget-? WHERE id=?", (b+1, a.id))
             c.execute("UPDATE agents SET budget=?,goal=?,deleg=?,launch=?,grants=?,state=?,task=NULL WHERE id=?",
                       (b, goal, t, launch, None if caps == want else dumps(sorted(caps)), 'pending', kid.id))
@@ -68,10 +71,19 @@ class Tree:
                       {'child': n, 'task': f't{t}'}, a.wf)
             kid = c.execute('SELECT * FROM agents WHERE id=?', (kid.id,)).fetchone()
         out = {'agent': n, 'role': role, 'task': f't{t}', 'depth': kid.depth, 'budget': b, 'launch': launch, 'token': kid.token,
-               'path': s.path(kid.id)} | ({'harness': harness} if harness else {})
+               'path': s.path(kid.id)} | ({'harness': harness or inh} if harness or inh else {})
         if caps != want: out['narrowed'] = sorted(want - caps)
-        if launch == 'host': out |= {'prompt': s.prompt(kid), 'hint': 'start a subagent with this prompt; gather collects its result'}
-        elif launch == 'runner': out['hint'] = "Hive's runner starts it as its own process; gather collects its result"
+        if launch == 'host':
+            out |= {'prompt': s.prompt(kid), 'hint': 'start a subagent with this prompt now (Hive flags helpers that have not started after 10 '
+                                                     'minutes); gather collects its result'}
+        elif launch == 'runner':
+            st = s.run() if s.run else 'off'
+            why = 'you run as a subagent, and subagents cannot start subagents of their own, so ' if sub and asked in ('auto', 'host') else ''
+            out['hint'] = why + ({'running': "Hive's runner starts it as its own process",
+                                  'off': "a runner starts it as its own process once someone runs hive run (automatic runners are off here)",
+                                  'none': 'it waits for a runner: no agent CLI or runner command is configured on this machine'}.get(st) or
+                                 f"Hive {st.replace('started', 'started a runner')} to start it as its own process") + \
+                (f' in {harness or inh}' if harness or inh else '') + '; gather collects its result'
         return out
 
     def prompt(s, kid):
@@ -79,7 +91,7 @@ class Tree:
         t = s.tasks.get(kid.deleg)
         chain = [s.agents.get(i) for i in reversed(s.agents.above(kid.id))]
         return lineageText(briefText(kid.name, kid.role, s.roles.get(kid.role).charter, kid.token), chain, t, kid.budget, s.cfg.depth-kid.depth,
-                           sorted(J(kid.grants)) if kid.grants else None, s.tips(f'{kid.goal} {t.about}') if s.tips else None)
+                           sorted(J(kid.grants)) if kid.grants else None, s.tips(f'{kid.goal} {t.about}') if s.tips else None, kid.launch == 'host')
 
     def gather(s, me, of=None, secs=60, any=False, budget=2000):
         if of: ts = [s.tasks.get(s.pick(x)) for x in ([of] if isinstance(of, str) else of)]

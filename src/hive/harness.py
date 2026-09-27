@@ -28,7 +28,8 @@ H = {
 }
 ORDER = tuple(H)
 LIST = {'cursor': ['cursor-agent', 'mcp', 'list']}
-OURS = re.compile(r'''(?:^|[\s/'"])hive['"]?\s+hook\s+(?:pre|post|prompt|stop|start|end)\b|\s-m\s+hive\s+hook\s+(?:pre|post|prompt|stop|start|end)\b''')
+OURS = re.compile(r'''(?:^|[\s/'"])hive['"]?\s+hook\s+(?:pre|post|prompt|stop|start|end)\b|\s-m\s+hive\s+hook\s+(?:pre|post|prompt|stop|start|end)\b|'''
+                  r'''(?:^|[\s/'"])hive-hook['"]?\s+(?:pre|post|prompt|stop|start|end)\b''')
 TBL = re.compile(r'^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$')
 ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 
@@ -58,10 +59,28 @@ def server(scope, root): return exe() + ['mcp'] + (['--dir', str(root)] if scope
 def extra(): return {'HIVE_HOME': str(Path(h).expanduser().resolve())} if (h := os.environ.get('HIVE_HOME')) and Path(h).expanduser().resolve() != Path('~/.hive').expanduser().resolve() else {}
 
 
-def hookCmd(ev, fmt='claude'):
-    e, hm = [f'{k}={v}' for k, v in extra().items()], extra().get('HIVE_HOME') or str(Path('~/.hive').expanduser())
-    run = shlex.join((['env', *e] if e else []) + exe() + ['hook', ev] + (['--format', fmt] if fmt != 'claude' else []))
-    return f'[ -n "${{HIVE_AGENT:-}}${{HIVE_AGENT_TOKEN:-}}" ] || [ -e {shlex.quote(str(Path(hm).expanduser()/"bound"))} ] || exit 0; exec {run}'
+GATE = '''#!/bin/sh
+# Hive hook gate: start Hive only in sessions that belong to a hive, without starting any other process to find out.
+[ -n "${HIVE_AGENT:-}${HIVE_AGENT_TOKEN:-}" ] || [ -e %(marks)s/$PPID ] ||
+  { [ -r /proc/$PPID/stat ] && read -r _ _ _ p _ < /proc/$PPID/stat && [ -e %(marks)s/$p ]; } || exit 0
+exec %(run)s hook "$@"
+'''
+
+
+def gate(dry=False):
+    e, hm = [f'{k}={v}' for k, v in extra().items()], Path(extra().get('HIVE_HOME') or '~/.hive').expanduser()
+    p = hm/'hive-hook'
+    text = GATE % {'marks': shlex.quote(str(hm/'bound')), 'run': shlex.join((['env', *e] if e else []) + exe())}
+    if not dry and (not p.exists() or p.read_text() != text):
+        from .reg import reg
+        hm.mkdir(parents=True, exist_ok=True)
+        reg()
+        p.write_text(text)
+        p.chmod(0o755)
+    return p
+
+
+def hookCmd(ev, fmt='claude', dry=False): return shlex.join([str(gate(dry)), ev] + (['--format', fmt] if fmt != 'claude' else []))
 
 
 def where(f, root): return Path(f).expanduser() if f.startswith('~') else Path(root)/f
@@ -186,7 +205,7 @@ def putHooks(n, scope, root, on=True, dry=False):
         if not hs[ev]: del hs[ev]
     for ev, m, k in evs if on else ():
         t = (60 if k == 'stop' else 30) * (1000 if fmt == 'gemini' else 1)
-        hs.setdefault(ev, []).append(({'matcher': m} if m else {}) | {'hooks': [{'type': 'command', 'command': hookCmd(k, fmt), 'timeout': t}]})
+        hs.setdefault(ev, []).append(({'matcher': m} if m else {}) | {'hooks': [{'type': 'command', 'command': hookCmd(k, fmt, dry), 'timeout': t}]})
     if hs: d['hooks'] = hs
     else: d.pop('hooks', None)
     if not d and n == 'grok':
@@ -330,14 +349,14 @@ def env(h, a, n): return {'HIVE_DB': str(h.cfg.db), 'HIVE_ROOT': str(h.root), 'H
 
 
 def start(h, n, prompt='', role='implementer', name=None, task=None, headless=False, model=None, extra=(), wf=None, say=print):
-    from .reg import reg
+    from .reg import reg, stamp
     p = profile(n, h.cfg)
     if not (b := shutil.which(p['bin'])): raise Missing(f"{p['bin']} is not installed or not on PATH")
     if headless and not (prompt or task): raise Bad('a headless agent needs a prompt or --task')
     if n in H and not installed(n, h.root):
         for f, what in install(n, 'user', h.root): say(f'{what} {f} so {n} can reach the hive')
     if task:
-        d = h.op().dispatch(task, name)
+        d = h.op()._dispatch(task, name)
         x = h.sess(d['token'])
         body = d['prompt'] + (f'\n\n{prompt}' if prompt else '')
     else:
@@ -358,6 +377,7 @@ def start(h, n, prompt='', role='implementer', name=None, task=None, headless=Fa
     old, proc, r = None if headless else signal.signal(signal.SIGINT, lambda *_: None), None, reg()
     try:
         proc = subprocess.Popen(cmd, cwd=h.root, env={**os.environ, **env(h, a, n)})
+        with h.db.tx() as c: h.agents.set(c, a.id, pid=proc.pid, pidAt=stamp(proc.pid))
         if r: r.bind(proc.pid, h.cfg.db, h.root, a.name, a.token, n)
         return proc.wait()
     except KeyboardInterrupt:

@@ -31,7 +31,7 @@ class Tasks:
         names = s.agents.names() if names is None else names
         out = {'id': f't{t.id}', 'title': t.title, 'state': t.state, 'role': t.role, 'kind': t.kind, 'owner': names.get(t.owner),
                'after': [f't{d}' for d in (s.deps(t.id) if after is None else after)]}
-        for k, v in (('prio', t.prio), ('verify', t.verify), ('checks', t.checks and f't{t.checks}'), ('paths', t.paths), ('harness', t.get('harness'))):
+        for k, v in (('prio', t.prio), ('verify', t.verify), ('checks', t.checks and f't{t.checks}'), ('paths', t.paths), ('harness', (t.get('harness') or '').lstrip('~'))):
             if v: out[k] = v
         if t.wf: out['workflow'] = s.agents.wfNames().get(t.wf)
         if t.get('node'): out['node'] = names.get(t.node)

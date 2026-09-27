@@ -7,7 +7,7 @@ from hive import Hive
 from hive.cfg import locate
 from hive.cli import main
 from hive.err import Bad
-from hive.harness import doctor, install, installed, uninstall
+from hive.harness import doctor, hookCmd, install, installed, uninstall
 from hive.hook import main as hookMain
 from hive.reg import alive, mine, nearest, reg
 from hive.run import Runner
@@ -127,7 +127,8 @@ def testHookCleanupSparesSimilarCommandsAndCarriesHiveHome(home, root):
     (root/'.claude'/'settings.json').write_text(json.dumps({'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': '~/bin/beehive hook stop --notify'}]}]}}))
     install('claude', 'project', root)
     stop = json.loads((root/'.claude'/'settings.json').read_text())['hooks']['Stop']
-    assert f"exec env HIVE_HOME={os.environ['HIVE_HOME']} " in stop[1]['hooks'][0]['command']
+    assert stop[1]['hooks'][0]['command'].endswith('hive-hook stop')
+    assert f"exec env HIVE_HOME={Path(os.environ['HIVE_HOME']).resolve()} " in (Path(os.environ['HIVE_HOME'])/'hive-hook').read_text()
     assert json.loads((root/'.mcp.json').read_text())['mcpServers']['hive']['env'] == {'HIVE_HOME': os.environ['HIVE_HOME']}
     uninstall('claude', 'project', root)
     assert json.loads((root/'.claude'/'settings.json').read_text())['hooks']['Stop'][0]['hooks'][0]['command'] == '~/bin/beehive hook stop --notify'
@@ -266,14 +267,36 @@ def testHarnessDetectionSkipsInterpreterFlags(monkeypatch):
     assert r.script(1) == ''
 
 
-def testStaleReadersCannotClearTheBoundMarker(hive, root):
+def testMarkersFollowBindingsPerHarnessProcess(hive, root):
     x = hive.join('m', 'implementer')
-    stale = []
+    marks = Path(os.environ['HIVE_HOME'])/'bound'
     reg().bind(os.getpid(), hive.cfg.db, root, 'm', x.token, 'grok')
-    assert (Path(os.environ['HIVE_HOME'])/'bound').exists()
-    assert nearest(stale) is None and (Path(os.environ['HIVE_HOME'])/'bound').exists(), 'a reader with an old snapshot cleared the marker'
+    (marks/'999999').touch()
+    reg().bind(os.getpid(), hive.cfg.db, root, 'm', x.token, 'grok')
+    assert sorted(f.name for f in marks.iterdir()) == [str(os.getpid())], 'dead harness markers are cleaned'
+    assert nearest([]) is None and (marks/str(os.getpid())).exists(), 'a reader with an old snapshot cleared a live marker'
     reg().unbind(token=x.token)
-    assert not (Path(os.environ['HIVE_HOME'])/'bound').exists()
+    assert not any(marks.iterdir())
+
+
+def testGateStartsHiveOnlyForSessionsInAHive(home, root, tmp_path, monkeypatch):
+    ran = tmp_path/'ran'
+    monkeypatch.setattr('hive.harness.exe', lambda: ['sh', '-c', f'echo "$@" >> {ran}', 'x'])
+    cmd = hookCmd('post')
+    bare = {'PATH': os.environ['PATH'], 'HOME': str(home)}
+    sh = lambda c, **e: subprocess.run(['sh', '-c', c], env=bare | e, capture_output=True, text=True, timeout=240)
+    r = sh(cmd)
+    assert r.returncode == 0 and r.stdout == r.stderr == '' and not ran.exists()
+    sh(cmd, HIVE_AGENT='alice')
+    assert ran.read_text().split() == ['hook', 'post']
+    ran.unlink()
+    (d := Path(os.environ['HIVE_HOME'])/'bound').mkdir(parents=True, exist_ok=True)
+    (d/str(os.getpid())).touch()
+    sh(cmd)
+    assert ran.read_text().split() == ['hook', 'post'], 'the gate finds the harness that runs it'
+    if os.path.exists('/proc/self/stat'):
+        sh(cmd + '; :')
+        assert ran.read_text().split() == ['hook', 'post']*2, 'on Linux the gate also finds the harness behind an extra shell'
 
 
 def testHookCommandsNeverReferenceUnsetVariables(home, root):

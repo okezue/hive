@@ -11,7 +11,7 @@ from .mail import show
 from .mount import spec
 from .merge import lines as split
 from .prompt import brief, task as taskPrompt
-from .util import J, dumps, line, now, pid, poll
+from .util import J, ago, dumps, line, now, pid, poll
 
 TOPICS = ('file:', 'context:', 'agent:', 'task:', 'tool:', 'thread:', 'kind:')
 
@@ -140,7 +140,11 @@ class Sess:
         dst = s._to(a, to)
         with s._tx() as c:
             ids = s.hive.mail.put(c, a, [x.id for x in dst], body, mode, thread=thread, re=pid('m', re, 'message') if re else None)
-        return {'sent': [f'm{i}' for i in ids], 'to': [x.name for x in dst], 'mode': mode}
+        out = {'sent': [f'm{i}' for i in ids], 'to': [x.name for x in dst], 'mode': mode}
+        if quiet := [f"{x.name} ({'no Hive call yet' if not x.calls else 'last call ' + ago(x.seen)})" for x in dst
+                     if s.hive.agents.hosted(x) and (not x.calls or now()-x.seen > 300)]:
+            out['note'] = f"{', '.join(quiet)}: subagents see messages only when they next call Hive"
+        return out
 
     def inbox(s, limit: int = 20, all: bool = False):
         a, names = s._me(), s.hive.agents.names()
@@ -286,7 +290,24 @@ class Sess:
 
     def cancel(s, id: str, reason: str): return s.hive.tasks.cancel(s._me(), id, reason)
 
-    def dispatch(s, id: str, name: str | None = None, budget: int = 0):
+    def dispatch(s, id: str, name: str | None = None, budget: int = 0, launch: str = 'auto'):
+        a, h = s._me(), s.hive
+        h.roles.need(a, 'spawn', 'dispatch agents')
+        if launch not in ('auto', 'host', 'runner'): raise Bad('launch is auto, host, or runner')
+        if launch != 'runner' and not h.agents.hosted(a): return s._dispatch(id, name, budget, True)
+        with s._tx() as c:
+            t = h.tasks.get(pid('t', id, 'task'), c)
+            if t.state != 'ready' or t.owner: raise Clash(f"t{t.id} is {t.state}{' and reserved' if t.owner else ''}", 'only free ready tasks dispatch')
+            c.execute('UPDATE tasks SET run=1 WHERE id=?', (t.id,))
+            h.log.add(c, a.id, 'task.handed', f't{t.id} handed to the runner: {line(t.title, 80)}', f'task:t{t.id}', wf=t.wf)
+        st = h.autorun()
+        why = 'you run as a subagent, and subagents cannot start subagents of their own, so ' if launch != 'runner' else ''
+        return {'task': f't{t.id}', 'launch': 'runner', 'runner': st,
+                'hint': why + ('the runner starts an agent for it as its own process' if st == 'running' else
+                               f"Hive {st.replace('started', 'started a runner')} that starts an agent for it" if st.startswith('started') else
+                               'it waits until someone runs hive run') + '; watch it with tasks or gather'}
+
+    def _dispatch(s, id, name=None, budget=0, sub=False):
         a, h = s._me(), s.hive
         h.roles.need(a, 'spawn', 'dispatch agents')
         with s._tx() as c:
@@ -302,15 +323,15 @@ class Sess:
             h.tasks.reserve(c, a, t.id, kid.id)
             c.execute('UPDATE agents SET budget=?,goal=?,deleg=?,grants=? WHERE id=?',
                       (budget, t.about or t.title, t.id, None if want <= mine else dumps(sorted(want & mine)), kid.id))
-        return {'agent': n, 'role': role, 'token': kid.token, 'task': f't{t.id}', 'prompt': s.promptFor(kid, t.id),
-                'hint': f'start an agent with this prompt; it acts in the hive as {n}'}
+        return {'agent': n, 'role': role, 'token': kid.token, 'task': f't{t.id}', 'prompt': s.promptFor(kid, t.id, sub),
+                'hint': f'start an agent with this prompt now; it acts in the hive as {n}, and Hive flags agents that have not started after 10 minutes'}
 
-    def promptFor(s, kid, i):
+    def promptFor(s, kid, i, sub=False):
         a, h = kid.agent, s.hive
         if a.launch: return h.tree.prompt(a)
         t = h.tasks.get(i)
         return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token), h.tasks.show(t, full=True),
-                          h.tasks.context(a, i).get('dependencies'), None if t.kind == 'verify' else h.know.tips(f'{t.title} {t.about}'))
+                          h.tasks.context(a, i).get('dependencies'), None if t.kind == 'verify' else h.know.tips(f'{t.title} {t.about}'), sub)
 
     def define(s, name: str, charter: str, caps: list[str]):
         a = s._me()
@@ -328,10 +349,10 @@ class Sess:
             h.log.add(c, a.id, 'agent.role', f'{t.name}: {t.role} -> {role}', f'agent:{t.name}', wf=a.wf)
         return {'agent': t.name, 'role': role}
 
-    def spawn(s, goal: str, role: str | None = None, name: str | None = None, budget: int | None = None, launch: str = 'host',
+    def spawn(s, goal: str, role: str | None = None, name: str | None = None, budget: int | None = None, launch: str = 'auto',
               grants: list[str] | None = None, deliver: str = '', paths: list[str] | None = None, verify: bool | str = False, harness: str | None = None):
         if harness: profile(harness, s.hive.cfg, True)
-        return s.hive.tree.spawn(s._me(), goal, role, name, budget, 'runner' if harness and launch == 'host' else launch, grants, deliver, paths, verify, harness)
+        return s.hive.tree.spawn(s._me(), goal, role, name, budget, launch, grants, deliver, paths, verify, harness)
 
     def gather(s, of: list[str] | str | None = None, secs: float = 60, any: bool = False, budget: int = 2000):
         return s.hive.tree.gather(s._me(), of, secs, any, budget)

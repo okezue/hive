@@ -72,14 +72,22 @@ def same(p, was):
 def home(): return Path(os.environ.get('HIVE_HOME') or '~/.hive').expanduser()
 
 
-def mark(on):
-    with suppress(OSError): (home()/'bound').touch() if on else (home()/'bound').unlink(missing_ok=True)
+def marks():
+    d = home()/'bound'
+    if d.is_file(): d.unlink()
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
-def unmark():
-    if not (home()/'bound').exists() or not (r := reg()): return
-    with suppress(Exception), r.db.tx() as c:
-        if not any(alive(x.pid) and os.path.exists(x.db) for x in c.execute('SELECT pid,db FROM binds').fetchall()): mark(False)
+def mark(pid, on=True):
+    with suppress(OSError): (marks()/str(pid)).touch() if on else (marks()/str(pid)).unlink(missing_ok=True)
+
+
+def unmark(c):
+    live = {r.pid for r in c.execute('SELECT pid,db FROM binds').fetchall() if alive(r.pid) and os.path.exists(r.db)}
+    with suppress(OSError):
+        for f in marks().iterdir():
+            if not f.name.isdigit() or int(f.name) not in live: f.unlink(missing_ok=True)
 
 
 def reg():
@@ -147,7 +155,12 @@ def inside(root, cwd): return cwd == root or root in cwd.parents
 
 
 class Reg:
-    def __init__(s, path): s.db = Db(path, schema=SCHEMA, add=())
+    def __init__(s, path):
+        s.db = Db(path, schema=SCHEMA, add=())
+        if not (home()/'bound').is_dir():
+            for r in s.db.q('SELECT pid,db FROM binds'):
+                if alive(r.pid) and os.path.exists(r.db): mark(r.pid)
+            marks()
 
     def seen(s, db, root, name):
         db, t = str(db), now()
@@ -169,12 +182,13 @@ class Reg:
             c.execute('INSERT INTO binds VALUES(?,?,?,?,?,?,?,?)', (pid, at, str(db), str(root), agent, token, harness, now()))
             c.executemany('DELETE FROM binds WHERE pid=?', [(r.pid,) for r in c.execute('SELECT DISTINCT pid,db FROM binds').fetchall()
                                                             if not alive(r.pid) or not os.path.exists(r.db)])
-        mark(True)
+            mark(pid)
+            unmark(c)
 
     def unbind(s, pid=None, token=None):
         with s.db.tx() as c:
             c.execute('DELETE FROM binds WHERE pid=? OR token=?', (pid, token))
-            if not c.execute('SELECT 1 FROM binds').fetchone(): mark(False)
+            unmark(c)
 
     def holder(s, pid): return next((r for r in s.db.q('SELECT * FROM binds WHERE pid=?', (pid,)) if same(pid, r.at)), None)
 
@@ -184,7 +198,8 @@ def nearest(rows, pid=None):
     for r in rows:
         if alive(r.pid) and os.path.exists(r.db): by.setdefault(r.pid, []).append(r)
     if not by:
-        unmark()
+        if (r := reg()) and any(marks().iterdir()):
+            with suppress(Exception), r.db.tx() as c: unmark(c)
         return None
     for p, _ in chain(pid, set(by)):
         for r in by.get(p, ()):

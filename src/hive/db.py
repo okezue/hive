@@ -61,7 +61,7 @@ ADD = (('agents', 'keeper', 'INTEGER'), ('agents', 'depth', 'INTEGER DEFAULT 0')
        ('agents', 'goal', "TEXT DEFAULT ''"), ('agents', 'launch', 'TEXT'), ('agents', 'deleg', 'INTEGER'), ('agents', 'grants', 'TEXT'),
        ('tasks', 'deliver', "TEXT DEFAULT ''"), ('tasks', 'node', 'INTEGER'), ('tasks', 'wake', 'REAL DEFAULT 0'), ('agents', 'pid', 'INTEGER'), ('agents', 'pidAt', 'TEXT'),
        ('faults', 'made', 'INTEGER DEFAULT 0'), ('faults', 'lone', 'INTEGER DEFAULT 0'), ('agents', 'harness', "TEXT DEFAULT ''"),
-       ('tasks', 'harness', "TEXT DEFAULT ''"))
+       ('tasks', 'harness', "TEXT DEFAULT ''"), ('tasks', 'run', 'INTEGER DEFAULT 0'))
 
 
 class Db:

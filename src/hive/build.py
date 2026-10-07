@@ -346,6 +346,19 @@ def deliver(h, r, top):
     return got
 
 
+_ready = {}
+
+
+def ready(root):
+    if (x := _ready.get(k := str(root))) and now()-x[1] < 60: return x[0]
+    try:
+        top, common, key = project(root)
+        v = bool(common) and bool(conf(top, hhome()/'build'/key)['kinds'])
+    except Exception: v = False
+    _ready[k] = (v, now())
+    return v
+
+
 def envOf(c): return {k: v for k, v in os.environ.items() if k in PASS or k.startswith(PRE) or k in (c.get('pass') or [])}
 
 

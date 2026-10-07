@@ -350,6 +350,7 @@ def env(h, a, n): return {'HIVE_DB': str(h.cfg.db), 'HIVE_ROOT': str(h.root), 'H
 
 
 def start(h, n, prompt='', role='implementer', name=None, task=None, headless=False, model=None, extra=(), wf=None, say=print):
+    from .build import ready
     from .reg import reg, stamp
     p = profile(n, h.cfg)
     if not (b := shutil.which(p['bin'])): raise Missing(f"{p['bin']} is not installed or not on PATH")
@@ -364,7 +365,7 @@ def start(h, n, prompt='', role='implementer', name=None, task=None, headless=Fa
         taken = {a.name for a in h.agents.all()}
         x = h.join(name or next(k for k in (n, *(f'{n}{i}' for i in range(2, 999))) if k not in taken), role, wf, about=f'{n} session started from the hive CLI')
         a = x.agent
-        b0 = brief(a.name, a.role, h.roles.get(a.role).charter, a.token)
+        b0 = brief(a.name, a.role, h.roles.get(a.role).charter, a.token, ready(h.root))
         body = f'{b0}\n\n{prompt}' if prompt else b0 + '\n\nThe user talks to you in this terminal; wait for their instructions.' \
             if headless or not (n in H and hooked(n, h.root)) else ''
     a = x.agent

@@ -346,3 +346,9 @@ def testDuplicateOutputNamesAndWhoAsked(proj):
     r = ask(proj, 'two', wait=120, by='zed')
     assert sorted(r['artifacts']) == sorted(str(proj/'.hive'/'out'/'two'/x) for x in ('a/app', 'b/app'))
     assert (proj/'.hive'/'out'/'two'/'b'/'app').read_text() == 'B\n' and recent(proj)[0]['by'] == ['zed']
+
+
+def testOnlyProjectsWithBuildsTellAgentsToUseThem(proj, root):
+    from hive import Hive
+    assert 'with `build`' in Hive.open(proj/'.hive'/'hive.db', proj).join('b1', 'implementer').welcome()['brief']
+    assert 'with `build`' not in Hive.open(root/'.hive'/'hive.db', root).join('b2', 'implementer').welcome()['brief']

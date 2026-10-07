@@ -7,6 +7,7 @@ from typing_extensions import NotRequired, TypedDict
 
 from .err import Anon, Bad, Clash, Denied, Missing
 from .log import fmt
+from .build import ready
 from .harness import profile
 from .mail import show
 from .mount import spec
@@ -70,7 +71,7 @@ class Sess:
     def welcome(s):
         a = s.agent
         o = s.hive.aware.overview(a)
-        return {'agent': a.name, 'token': a.token, 'role': a.role, 'brief': brief(a.name, a.role, s.hive.roles.get(a.role).charter, a.token),
+        return {'agent': a.name, 'token': a.token, 'role': a.role, 'brief': brief(a.name, a.role, s.hive.roles.get(a.role).charter, a.token, ready(s.hive.root)),
                 'others': [x for x in o['agents'] if not x.get('you')], 'tasks': o['tasks']['counts']}
 
     def progress(s, text: str, state: str | None = None):
@@ -331,7 +332,7 @@ class Sess:
         a, h = kid.agent, s.hive
         if a.launch: return h.tree.prompt(a)
         t = h.tasks.get(i)
-        return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token), h.tasks.show(t, full=True),
+        return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token, ready(h.root)), h.tasks.show(t, full=True),
                           h.tasks.context(a, i).get('dependencies'), None if t.kind == 'verify' else h.know.tips(f'{t.title} {t.about}'), sub)
 
     def define(s, name: str, charter: str, caps: list[str]):

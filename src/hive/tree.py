@@ -1,5 +1,6 @@
 import math
 
+from .build import ready
 from .err import Bad, Clash, Denied, Missing
 from .log import fmt
 from .prompt import brief as briefText, lineage as lineageText
@@ -90,7 +91,7 @@ class Tree:
         kid = s.agents.get(kid.id)
         t = s.tasks.get(kid.deleg)
         chain = [s.agents.get(i) for i in reversed(s.agents.above(kid.id))]
-        return lineageText(briefText(kid.name, kid.role, s.roles.get(kid.role).charter, kid.token), chain, t, kid.budget, s.cfg.depth-kid.depth,
+        return lineageText(briefText(kid.name, kid.role, s.roles.get(kid.role).charter, kid.token, ready(s.cfg.root)), chain, t, kid.budget, s.cfg.depth-kid.depth,
                            sorted(J(kid.grants)) if kid.grants else None, s.tips(f'{kid.goal} {t.about}') if s.tips else None, kid.launch == 'host')
 
     def gather(s, me, of=None, secs=60, any=False, budget=2000):

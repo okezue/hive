@@ -229,7 +229,7 @@ def testSnapshotsReadWhatIsOnDisk(proj):
 
 
 def testKilledWorkersLeaveNoOrphanBuildsAndPollingRestartsThem(proj):
-    kind(proj, 'nap', 'cmd = "echo start $$ >> {slot}/trace; sleep 6; echo end >> {slot}/trace"')
+    kind(proj, 'nap', 'cmd = "n=90; [ -s {slot}/trace ] && n=1; echo start $$ >> {slot}/trace; sleep $n; echo end >> {slot}/trace"')
     r = ask(proj, 'nap', wait=0)
     h, end = home(project(proj)[2]), time.time()+120
     while not list(h.glob('slots/*/trace')) and time.time() < end: time.sleep(.2)
@@ -352,3 +352,45 @@ def testOnlyProjectsWithBuildsTellAgentsToUseThem(proj, root):
     from hive import Hive
     assert 'with `build`' in Hive.open(proj/'.hive'/'hive.db', proj).join('b1', 'implementer').welcome()['brief']
     assert 'with `build`' not in Hive.open(root/'.hive'/'hive.db', root).join('b2', 'implementer').welcome()['brief']
+
+
+def testBuildsWaitForFreeDiskAndSayWhy(proj, monkeypatch):
+    h = home(project(proj)[2])
+    with queue(h).tx() as c: c.execute('INSERT OR REPLACE INTO meta VALUES(?,?)', ('worker', json.dumps({'pid': os.getpid(), 'ts': time.time()+3600})))
+    (c := proj/'.hive'/'config.toml').write_text(c.read_text().replace('linger = 4\n', 'linger = 4\ndisk = 50\n'))
+    space = [10.]
+    monkeypatch.setattr('hive.build.room', lambda h: space[0])
+    r = ask(proj, wait=0)
+    threading.Thread(target=Worker(h).run, daemon=True).start()
+    r = ask(proj, rid=r['build'], wait=3)
+    assert r['state'] == 'queued' and 'waiting for free disk: 10 GB free, builds need 50' in r['hint']
+    space[0] = 80.
+    assert ask(proj, rid=r['build'], wait=120)['ok']
+
+
+def testPureKindsShareResultsAcrossCheckouts(proj, tmp_path):
+    kind(proj, 'pure', 'cmd = "echo {root} > {cache}/r.txt"\npure = true\noutputs = ["{cache}/r.txt"]')
+    a = ask(proj, 'pure', wait=120)
+    sh(proj, 'worktree', 'add', '-q', str(w := tmp_path/'wt5'), '-b', 'w5')
+    (w/'.hive').mkdir(exist_ok=True)
+    (w/'.hive'/'config.toml').write_text((proj/'.hive'/'config.toml').read_text())
+    b = ask(w, 'pure', wait=120)
+    assert b['cached'] and b['build'] == a['build']
+
+
+def testHivesOutsideARepoListTheBuildableRepositories(proj, tmp_path):
+    from hive import Hive
+    from hive.err import Missing
+    ask(proj, wait=120)
+    (other := tmp_path/'notrepo').mkdir()
+    b = Hive.open(other/'.hive'/'hive.db', other).join('far', 'implementer').welcome()['brief']
+    assert 'with `build`' in b and f'checkouts of {proj}' in b and 'build(path=<your checkout>)' in b
+    with pytest.raises(Missing, match='pass path'): ask(other)
+
+
+def testAutoDetectedProjectsAreNotAdvertisedInBriefs(tmp_path):
+    from hive import Hive
+    (d := tmp_path/'rusty').mkdir()
+    (d/'Cargo.toml').write_text('[package]\nname = "x"\n')
+    sh(d, 'init', '-q')
+    assert 'with `build`' not in Hive.open(d/'.hive'/'hive.db', d).join('r', 'implementer').welcome()['brief']

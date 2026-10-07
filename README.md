@@ -64,8 +64,10 @@ slots = 2              # shared warm build folders
 max = 2                # builds at once across every project on this machine
 free = 20              # free memory (%) needed to start a build
 floor = 8              # pause running builds below this
+disk = 5               # free disk (GB) needed to start a build
 priority = "low"       # low (nice), background (efficiency cores on macOS), or normal
 inputs = ["app", "core"]   # only these paths define the build (default: the whole repository)
+pass = ["MY_TOOLCHAIN"]    # extra environment variables builds receive and are keyed on
 
 [build.env]
 CARGO_TARGET_DIR = "{cache}/target"
@@ -81,7 +83,9 @@ outputs = ["{cache}/MyApp.app"]
 timeout = 3600
 ```
 
-Commands may use `{slot}`, `{src}` (the synced sources), `{cache}` (a per-folder cache directory), `{jobs}`, `{root}` (the requester's checkout), and `{home}`.
+Commands may use `{slot}`, `{src}` (the synced sources), `{cache}` (a per-folder cache directory), `{jobs}`, `{root}` (the requester's checkout), and `{home}`. A build that uses `{root}` is cached per checkout unless its kind sets `pure = true` (its result depends only on the synced files). Builds receive a fixed set of toolchain variables (PATH, HOME, compiler and SDK settings) plus `pass`, which keeps results reproducible and shareable between agents. A command can wrap an existing queue or script, so Hive's sharing and caching sit on top of whatever already controls the machine.
+
+Agents learn about `build` from their brief only where a project's build commands are configured explicitly (auto-detected projects work when asked, but are not advertised). A hive whose root is not a repository lists the configured repositories, so agents working in worktrees pass `path`.
 
 ## How agents work together
 

@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS stats(kind TEXT PRIMARY KEY,peak REAL,secs REAL,jobs 
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,val TEXT)
 '''
 ADD = (('runs', 'pg', 'INTEGER'),)
-DEF = {'slots': 2, 'max': 2, 'free': 20, 'floor': 8, 'reserve': 2048, 'priority': 'low', 'jobs': 'auto', 'timeout': 3600, 'pausemax': 1800,
+DEF = {'slots': 2, 'max': 2, 'free': 20, 'floor': 8, 'reserve': 2048, 'disk': 5, 'priority': 'low', 'jobs': 'auto', 'timeout': 3600, 'pausemax': 1800,
        'linger': 120, 'inputs': [], 'env': {}, 'pass': []}
 PASS = ('PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TMPDIR', 'DEVELOPER_DIR', 'SDKROOT', 'TOOLCHAINS', 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS',
         'CPPFLAGS', 'LDFLAGS', 'RUSTFLAGS', 'RUSTC', 'RUSTUP_HOME', 'RUSTUP_TOOLCHAIN', 'CARGO_HOME', 'GOPATH', 'GOROOT', 'GOFLAGS', 'JAVA_HOME',
@@ -78,8 +78,8 @@ def detect(r):
     return {}
 
 
-def conf(top, home):
-    c, ks = dict(DEF), detect(top)
+def conf(top, home, own=False):
+    c, ks = dict(DEF), {} if own else detect(top)
     for f in (home/'config.toml', top/'.hive'/'config.toml'):
         try: b = dict(tomllib.loads(f.read_text()).get('build') or {})
         except (OSError, tomllib.TOMLDecodeError): continue
@@ -349,12 +349,23 @@ def deliver(h, r, top):
 _ready = {}
 
 
+def room(h): return shutil.disk_usage(h).free/2**30
+
+
+def projects():
+    out = []
+    with suppress(OSError):
+        for d in sorted((hhome()/'build').iterdir()):
+            if (p := rj(d/'project.json', {})).get('repo') and Path(p['repo']).is_dir() and conf(Path(p['repo']), d, True)['kinds']: out.append(p['repo'])
+    return out
+
+
 def ready(root):
     if (x := _ready.get(k := str(root))) and now()-x[1] < 60: return x[0]
     try:
         top, common, key = project(root)
-        v = bool(common) and bool(conf(top, hhome()/'build'/key)['kinds'])
-    except Exception: v = False
+        v = 'here' if common and conf(top, hhome()/'build'/key, True)['kinds'] else ', '.join(projects())
+    except Exception: v = ''
     _ready[k] = (v, now())
     return v
 
@@ -367,7 +378,9 @@ def ask(root, kind=None, wait=120., by='', rid=None, force=False):
     h = home(key)
     q = queue(h)
     if rid is None:
-        if common is None: raise Missing(f'{top} is not in a git repository', 'build snapshots files through git; run git init and commit, or build there yourself')
+        if common is None:
+            raise Missing(f'{top} is not in a git repository', 'pass path=<your checkout>' + (f' (builds are set up for checkouts of {ps})' if (ps := ', '.join(projects())) else ''))
+        if not (h/'project.json').exists(): wj(h/'project.json', {'repo': str(common.parent if common.name == '.git' else common)})
         c = conf(top, h)
         if not (ks := c['kinds']):
             raise Missing('this project has no build commands', f'add [build.kinds.<name>] cmd = [...] to {top}/.hive/config.toml or {h}/config.toml')
@@ -376,7 +389,7 @@ def ask(root, kind=None, wait=120., by='', rid=None, force=False):
         man, env = snap(top, c['inputs'], h/'cas'), envOf(c)
         spec = {'kind': kind, **ks[kind], 'env': {**c['env'], **(ks[kind].get('env') or {})}}
         k = sha(dumps(sorted(man.items())) + dumps(spec) + dumps(sorted((x, y) for x, y in env.items() if x != 'TMPDIR')) +
-                (str(top) if '{root}' in dumps(spec) else ''))
+                (str(top) if '{root}' in dumps(spec) and not ks[kind].get('pure') else ''))
         with q.tx() as t:
             r = None if force else t.execute("SELECT * FROM runs WHERE key=? AND state='done' ORDER BY id DESC LIMIT 1", (k,)).fetchone()
             if r: t.execute('INSERT INTO asks VALUES(?,?,?,?,0)', (r.id, str(top), by, now()))
@@ -401,8 +414,10 @@ def ask(root, kind=None, wait=120., by='', rid=None, force=False):
             chk = time.monotonic()
             with q.tx() as t: start(h, t)
         if time.monotonic() >= end:
-            pos = q.one("SELECT COUNT(*) n FROM runs WHERE state='queued' AND id<?", (rid,)).n
-            return show(r, pos) | {'hint': f'still {r.state}; call build again with id="b{rid}" to wait for it'}
+            pos, cf = q.one("SELECT COUNT(*) n FROM runs WHERE state='queued' AND id<?", (rid,)).n, DEF | rj(h/'runs'/f'{rid}.json', {}).get('cfg', {})
+            why = f' (waiting for free disk: {room(h):.0f} GB free, builds need {cf["disk"]})' if r.state == 'queued' and room(h) < cf['disk'] else \
+                f' (waiting for free memory: {free():.0f}% free, builds need {cf["free"]}%)' if r.state == 'queued' and free() < cf['free'] else ''
+            return show(r, pos) | {'hint': f'still {r.state}{why}; call build again with id="b{rid}" to wait for it'}
         time.sleep(.5)
 
 
@@ -451,7 +466,7 @@ class Worker:
         return max(1, min(os.cpu_count() or 1, int((total()*free()/100 - cfg['reserve'])//per)))
 
     def fits(s, kind, cfg):
-        if free() < cfg['free']: return False
+        if free() < cfg['free'] or room(s.h) < cfg['disk']: return False
         if not s.live: return True
         st = s.q.one('SELECT * FROM stats WHERE kind=?', (kind,))
         return bool(st and st.peak) and st.peak*1.25 < total()*free()/100 - cfg['reserve']

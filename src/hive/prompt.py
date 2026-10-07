@@ -13,14 +13,15 @@ PROTOCOL = '''How to work in the hive (MCP server "hive"):
 
 
 BUILD = ("\n- Build, check, and test with `build` rather than running heavy build commands yourself: Hive builds your exact files in a shared "
-         "warm build folder, reuses everything unchanged, answers repeated states from cache, keeps the machine's memory safe, and gives you "
-         "just the errors. Pass path when you work in your own worktree.")
+         "warm build folder, reuses everything unchanged, answers repeated states from cache, keeps the machine's memory and disk safe, and gives "
+         "you just the errors. Pass path when you work in your own worktree.")
 
 
 def brief(n, role, charter, tok=None, build=False):
     parts = [f'You are {n}, {an(role)} in a Hive: a shared workspace where several agents work at once.', f'Your charter: {charter}']
     if tok: parts.append(f'Your Hive token is "{tok}". Pass agent="{tok}" on every Hive call (required when agents share a connection).')
-    return '\n\n'.join(parts+[PROTOCOL + (BUILD if build else '')])
+    more = '' if build in ('', 'here', False, True) else f' Builds are set up for checkouts of {build} and their worktrees: call build(path=<your checkout>).'
+    return '\n\n'.join(parts+[PROTOCOL + (BUILD + more if build else '')])
 
 
 def tipText(tips): return 'Insights saved from earlier work that may apply (weigh them if they help or mislead):\n' + '\n'.join(f'- {x}' for x in tips)

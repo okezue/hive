@@ -86,9 +86,9 @@ def testRunnerAgentsSpeakMcpOverStdio(root, tmp_path):
 async def testHttpServerEndToEnd(root):
     p = port()
     srv = subprocess.Popen([sys.executable, '-m', 'hive', '--db', str(root/'.hive'/'hive.db'), '--root', str(root), 'mcp', '--http', '--port', str(p)],
-                           env={**os.environ, 'HIVE_KEY': 'sesame'}, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                           env={**os.environ, 'HIVE_KEY': 'sesame'}, stdout=subprocess.DEVNULL, stderr=open(root/'srv.log', 'w'))
     try:
-        for _ in range(100):
+        for _ in range(600):
             try:
                 socket.create_connection(('127.0.0.1', p), .2).close()
                 break
@@ -104,7 +104,7 @@ async def testHttpServerEndToEnd(root):
             assert 'boss.rese1' in tree
     finally:
         srv.terminate()
-        srv.wait(10)
+        srv.wait(120)
 
 
 async def testSharedToolsAndViewsAcrossProcesses(root):

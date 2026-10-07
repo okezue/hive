@@ -116,6 +116,12 @@ DOCS = {
     'mount': 'Mount an MCP server (a command, or a url for HTTP servers) so every agent in the hive can call its tools as name.tool, whatever '
              'harness they run in. Mounting again refreshes its tools.',
     'unmount': 'Remove a mounted MCP server and its tools.',
+    'build': "Build, check, or test the project through Hive instead of running heavy build commands yourself. Hive snapshots your files, "
+             "builds them in a shared warm build folder that only recompiles what differs, answers states it already built from cache, lets "
+             "simultaneous requests for one state share a build, queues builds machine-wide by measured memory, and returns just the errors "
+             "(mapped to your files) plus any artifacts copied into .hive/out. kind is one of the project's build kinds (default build); "
+             "pass path when you work in your own worktree. Waits up to wait seconds (60 by default), then returns an id to call again with.",
+    'builds': 'Recent builds of this project: state, result, and who asked.',
     'answer': 'Reply to a call of a tool you share.',
     'result': 'Check or wait for the result of a shared tool call.',
     'withdraw': 'Stop sharing a tool.',
@@ -146,6 +152,10 @@ ARGS = {
     'spawn.deliver': 'What the child must hand back, e.g. "a patch to src/x.py and passing tests"',
     'spawn.launch': 'auto (default), host, runner, or none',
     'dispatch.launch': 'auto (default), host, or runner',
+    'build.kind': "The project's build kind, such as check, build, or test (default build)",
+    'build.id': 'A build id from an earlier call, to wait for its result',
+    'build.path': 'The checkout to build (a git worktree of this project); default this hive\'s root',
+    'build.force': 'Build again even if this exact state was built before',
     'gather.of': 'Agent names or task ids; default all your children',
     'gather.budget': 'Maximum length of returned results in tokens',
     'tree.depth': 'Levels below the node to show',

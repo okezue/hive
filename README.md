@@ -47,6 +47,42 @@ Work can be placed in a particular harness: a plan task or a `spawn` takes `harn
 
 **Sharing MCP servers.** `hive mount <name> -- <command> [args]` (or `--url` for HTTP servers) makes an MCP server's tools available to every agent in the hive as `<name>.<tool>`, called through Hive's `call`, so a Codex agent can use a server that only your Grok config has. `hive mount --from grok` imports the servers from a harness's config, and agents with the `exec` capability can `mount` servers themselves. Each agent's Hive server keeps its own live connection to a mounted server and reconnects if it dies; mount an HTTP server when every agent should share one instance. Environment values written as `${VAR}` are read from each caller when it connects, so secrets stay out of the hive.
 
+## Builds at scale
+
+When many agents work on one app, builds become the bottleneck: each checkout keeps its own cold build cache, every build recompiles from scratch somewhere, and parallel builds of a large project exhaust memory, so they end up queued for a long time. `build` (an MCP tool, and `hive build [kind]` on the command line) replaces running build commands directly:
+
+- **One warm build per state, at a stable path.** Hive snapshots the requester's files (tracked and uncommitted, read through git), then syncs only the files that differ into one of a few shared build folders and runs the build there. Every checkout of a repository, including all of its git worktrees, shares those folders, so compilers see the same absolute paths each time and their incremental state stays valid: a new worktree costs only its own changes, never a cold build, and the disk holds a few build caches instead of one per agent.
+- **Nothing is built twice.** A state that was already built is answered from cache at once (failures too, since they are deterministic), and simultaneous requests for one state share a single build. The build uses the snapshot taken at request time, so an agent can keep editing while it waits.
+- **Memory decides concurrency.** Hive measures each build's peak memory and starts another one beside it only when that peak fits in the memory that is free; it picks the job count from free memory and the measured memory per job, runs builds at low priority (or on background cores), caps builds across all projects on the machine, and pauses a build (SIGSTOP, then SIGCONT) when free memory falls below a floor instead of letting the machine run out.
+- **Agents get the answer, not the log.** The result lists the errors mapped to the project's own files (Swift, Clang, rustc, TypeScript and Go formats), a warning count, and the artifacts, which are cloned into `.hive/out/<kind>/` (copy-on-write on APFS). The full log stays on disk.
+
+Hive detects Cargo, SwiftPM, Xcode (simulator-free, unsigned, no index store, active architecture only), Go, npm, and Make projects. Anything else, or anything more specific, goes in `.hive/config.toml`, or in `~/.hive/build/<project>/config.toml` to keep it out of the repository:
+
+```toml
+[build]
+slots = 2              # shared warm build folders
+max = 2                # builds at once across every project on this machine
+free = 20              # free memory (%) needed to start a build
+floor = 8              # pause running builds below this
+priority = "low"       # low (nice), background (efficiency cores on macOS), or normal
+inputs = ["app", "core"]   # only these paths define the build (default: the whole repository)
+
+[build.env]
+CARGO_TARGET_DIR = "{cache}/target"
+
+[build.kinds.check]
+cmd = ["cargo", "check", "--workspace", "--message-format", "short"]
+cwd = "core"
+
+[build.kinds.app]
+cmd = ["./build.sh"]
+cwd = "app"
+outputs = ["{cache}/MyApp.app"]
+timeout = 3600
+```
+
+Commands may use `{slot}`, `{src}` (the synced sources), `{cache}` (a per-folder cache directory), `{jobs}`, `{root}` (the requester's checkout), and `{home}`.
+
 ## How agents work together
 
 **Roles.** Every agent has a role: `coordinator`, `implementer`, `verifier`, `reviewer`, `researcher`, `composer`, `distiller`, `observer`, or one a coordinator defines. A role is a charter plus capabilities, and every operation checks one. When an agent reaches outside its role the refusal restates its charter and points it at the agent whose job it is, and the charter is repeated to each agent every twenty calls. Verifiers cannot edit files or verify their own work, and tasks can only be taken by the role they name.
@@ -100,8 +136,9 @@ Every restart keeps the same agent identity, with its claims, file views, and un
 | files | `read` `edit` `write` `sync` `diff` `release` `claim` `files` `merges` `propose` `respond` `abandon` |
 | tasks | `plan` `tasks` `task` `take` `done` `fail` `verify` `cancel` `dispatch` `define` `assign` `retry` `faults` |
 | tree | `spawn` `gather` `tree` `node` `walk` `path` `find` `brief` `fund` `adopt` `escalate` `decide` `issues` |
+| build | `build` `builds` |
 | know | `note` `findings` `material` `compose` `gist` `stale` `harvest` `distill` `recall` `weigh` `retire` |
-| tools | `offer` `tools` `call` `answer` `result` `withdraw` |
+| tools | `offer` `tools` `call` `answer` `result` `withdraw` `mount` `unmount` |
 
 `hive mcp --tools core,msgs,files` exposes a subset.
 
@@ -122,7 +159,7 @@ dev.done(t, 'added /health; tests pass')
 
 ## CLI
 
-`hive install|uninstall|doctor [harness]`, `hive start <harness> [prompt]`, `hive ls`, `hive mount [name] [-- command]`, `hive unmount <name>`, `hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run [--harness h]`, `hive faults`, `hive retry [task]`, and `hive hook <event>` for harnesses. Commands act on the hive of the current project, or the one `-H <name|number|path>` picks from `hive ls`. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
+`hive install|uninstall|doctor [harness]`, `hive start <harness> [prompt]`, `hive build [kind] [--list|--kinds]`, `hive ls`, `hive mount [name] [-- command]`, `hive unmount <name>`, `hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run [--harness h]`, `hive faults`, `hive retry [task]`, and `hive hook <event>` for harnesses. Commands act on the hive of the current project, or the one `-H <name|number|path>` picks from `hive ls`. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
 
 ## Configuration
 

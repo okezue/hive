@@ -87,7 +87,16 @@ class Db:
             c.row_factory = row
             for p in ('busy_timeout=30000',) + (() if s.ro else ('journal_mode=WAL', 'synchronous=NORMAL')): c.execute('PRAGMA '+p)
             s.loc.c, s.loc.depth = c, 0
-            with s.lock: s.conns.append(c)
+            with s.lock:
+                # Connections belong to threads; long-lived servers run each request on a fresh pool thread, so drop the
+                # connections of threads that have exited before adding this one (otherwise descriptors leak until ulimit).
+                live = {t.ident for t in threading.enumerate()}
+                dead = [(tid, oc) for tid, oc in s.conns if tid not in live]
+                for tid, oc in dead:
+                    s.conns.remove((tid, oc))
+                    try: oc.close()
+                    except Exception: pass
+                s.conns.append((threading.get_ident(), c))
         return c
 
     @contextlib.contextmanager
@@ -124,7 +133,7 @@ class Db:
 
     def close(s):
         with s.lock:
-            for c in s.conns:
+            for _, c in s.conns:
                 with contextlib.suppress(sqlite3.Error): c.close()
             s.conns.clear()
         s.loc = threading.local()

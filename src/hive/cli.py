@@ -263,6 +263,29 @@ def mount(a):
 def unmount(a): dump(actor(opened(a), a).unmount(a.name))
 
 
+def build(a):
+    from .build import Worker, ask, conf, home, project, recent
+    if a.work: return Worker(a.work).run()
+    root = Path(a.root).resolve() if a.root else Path.cwd()
+    if a.list: return dump(recent(root, a.limit))
+    if a.kinds:
+        top, _, key = project(root)
+        return dump({'project': key, 'home': str(home(key)), 'kinds': conf(top, home(key))['kinds']})
+    r = ask(root, a.kind, a.wait, os.environ.get('HIVE_AGENT') or 'cli', a.id, a.force)
+    if a.json: dump(r)
+    else:
+        print(f"{r['build']} {r['kind']}: {r['state']}" + ('' if r['state'] in ('queued', 'running') else
+              f" {'ok' if r.get('ok') else 'FAILED'} in {r.get('secs')}s" + (' (cached)' if r.get('cached') else '') +
+              (f", slot {r['slot']}, {r['synced']} files synced, peak {r.get('peak')} MB" if r.get('slot') and not r.get('cached') else '')))
+        for e in r.get('errors', [])[:20]: print(f"  {e['file']}:{e['line']}:{e['col']}: {e['severity']}: {e['message']}")
+        if r.get('errorCount', 0) > 20: print(f"  ... {r['errorCount']-20} more errors")
+        if r.get('tail'): print(r['tail'])
+        for x in r.get('artifacts', []): print(f'  artifact: {x}')
+        if r.get('error'): print(f"  {r['error']}")
+        if r.get('hint'): print(f"  {r['hint']}")
+    return 3 if r['state'] in ('queued', 'running') else 0 if r.get('ok') else 1
+
+
 def parser():
     p = argparse.ArgumentParser(prog='hive')
     p.add_argument('--version', action='version', version=__version__)
@@ -313,6 +336,9 @@ def parser():
     cmd(mount, opt('names', nargs='*'), opt('--from', dest='frm'), opt('--url'), opt('--env', action='append'), opt('--header', action='append'),
         opt('--timeout', type=float, default=120), who=True)
     cmd(unmount, 'name', who=True)
+    cmd(build, opt('kind', nargs='?'), opt('--wait', type=float, default=3600), opt('--id'), opt('--list', action='store_true'),
+        opt('--limit', type=int, default=10), opt('--kinds', action='store_true'), opt('--json', action='store_true'), opt('--force', action='store_true'),
+        opt('--work', help=argparse.SUPPRESS))
     return p
 
 

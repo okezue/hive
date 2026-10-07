@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from typing_extensions import NotRequired, TypedDict
@@ -431,6 +432,15 @@ class Sess:
         return s.hive.tools.mount(s._me(), name, spec(command, args, env, url, headers, cwd), timeout)
 
     def unmount(s, name: str): return s.hive.tools.unmount(s._me(), name)
+
+    def build(s, kind: str | None = None, wait: float = 60, id: str | None = None, path: str | None = None, force: bool = False):
+        from .build import ask
+        return ask(Path(path).expanduser() if path else s.hive.root, kind, max(0., min(float(wait), 600.)), s._me().name, id, force)
+
+    def builds(s, limit: int = 10):
+        from .build import recent
+        s._me()
+        return {'builds': recent(s.hive.root, max(1, min(limit, 50)))}
 
     def call(s, name: str, args: dict[str, Any] | None = None, wait: float = 30): return s.hive.tools.call(s._me(), name, args, wait)
 

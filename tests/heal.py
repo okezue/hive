@@ -86,7 +86,7 @@ def run(hive, tmp_path):
     return go
 
 
-def runs(hive, t): return [x.split() for x in (hive.root/f'{t}.runs').read_text().splitlines()]
+def runs(hive, t): return [x.split() for x in (hive.root/f'{t}.runs').read_text().splitlines()] if (hive.root/f'{t}.runs').exists() else []
 
 
 def kinds(hive): return [r.kind for r in hive.db.q('SELECT kind FROM faults ORDER BY id')]
@@ -186,13 +186,15 @@ def testExhaustedTaskFailsWithADiagnosisAndRetryResumesIt(hive, run, capsys):
 
 
 def testStoppedAndLostAgentsResumeUnderANewRunner(hive, run):
-    r = run({'t1': ['hang', 'hang', 'done']}, secs=1)
-    assert r['counts'] == {'ready': 1} and kinds(hive) == ['stopped']
+    r = run({'t1': ['hang', 'hang', 'done']}, secs=15)
+    assert r['counts'] == {'ready': 1} and kinds(hive) == ['stopped'] and len(runs(hive, 't1')) == 1
     r1 = run({'t1': ['hang', 'hang', 'done']}, secs=0, plan=False)
+    n = len(runs(hive, 't1'))
     r1.recover()
     r1.step()
     [j] = r1.jobs.values()
-    while len(runs(hive, 't1')) < 2: time.sleep(.05)
+    end = time.time()+120
+    while len(runs(hive, 't1')) <= n and time.time() < end: time.sleep(.05)
     os.killpg(j.proc.pid, signal.SIGKILL)
     j.proc.wait()
     assert run({'t1': ['hang', 'hang', 'done']}, plan=False)['counts'] == {'done': 1}

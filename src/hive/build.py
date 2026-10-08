@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .db import Db
 from .err import Bad, Err, Missing
-from .reg import alive, home as hhome
+from .reg import alive, bsd, home as hhome
 from .util import J, clip, dumps, now
 
 SCHEMA = '''
@@ -253,25 +253,49 @@ def libc():
     return _lib['c']
 
 
-def group(pg):
-    tot = 0
-    if sys.platform == 'darwin':
-        if 'p' not in _lib:
-            try: _lib['p'] = ctypes.CDLL('/usr/lib/libproc.dylib')
-            except OSError: _lib['p'] = None
-        if lib := _lib['p']:
-            buf = (ctypes.c_int*8192)()
-            for p in buf[:max(0, min(8192, lib.proc_listpgrppids(pg, buf, ctypes.sizeof(buf))))]:
-                ri = (ctypes.c_uint64*64)()
-                if p and lib.proc_pid_rusage(p, 2, ri) == 0: tot += ri[9]
-            return tot/2**20
-    with suppress(OSError):
-        for d in os.listdir('/proc'):
-            if d.isdigit():
-                with suppress(OSError, ValueError, IndexError):
-                    if int(open(f'/proc/{d}/stat').read().rsplit(')', 1)[1].split()[2]) == pg:
-                        tot += int(open(f'/proc/{d}/statm').read().split()[1])*os.sysconf('SC_PAGE_SIZE')
-    return tot/2**20
+def proclib():
+    if 'p' not in _lib:
+        try: _lib['p'] = ctypes.CDLL('/usr/lib/libproc.dylib') if sys.platform == 'darwin' else None
+        except OSError: _lib['p'] = None
+    return _lib['p']
+
+
+def kids(root):
+    par = {}
+    if lib := proclib():
+        buf = (ctypes.c_int*(lib.proc_listallpids(None, 0)+512))()
+        for p in buf[:max(0, lib.proc_listallpids(buf, ctypes.sizeof(buf)))]:
+            if p and (b := bsd(p, True)): par.setdefault(b.ppid, []).append(p)
+    else:
+        with suppress(OSError):
+            for d in os.listdir('/proc'):
+                if d.isdigit():
+                    with suppress(OSError, ValueError, IndexError):
+                        par.setdefault(int(open(f'/proc/{d}/stat').read().rsplit(')', 1)[1].split()[1]), []).append(int(d))
+    out, st = {root}, [root]
+    while st:
+        for c in par.get(st.pop(), ()):
+            if c not in out:
+                out.add(c)
+                st.append(c)
+    return out
+
+
+def mem(p):
+    if lib := proclib():
+        ri = (ctypes.c_uint64*64)()
+        return ri[9] if lib.proc_pid_rusage(p, 2, ri) == 0 else 0
+    with suppress(OSError, ValueError, IndexError): return int(open(f'/proc/{p}/statm').read().split()[1])*os.sysconf('SC_PAGE_SIZE')
+    return 0
+
+
+def group(root): return sum(mem(p) for p in kids(root))/2**20
+
+
+def hit(root, sg, ps=None):
+    for p in ps or kids(root):
+        with suppress(OSError): os.kill(p, sg)
+    with suppress(OSError): os.killpg(root, sg)
 
 
 def wrap(cmd, pri):
@@ -333,8 +357,8 @@ def deliver(h, r, top):
     if not (arts := J(r.result, {}).get('artifacts')): return []
     out, got = top/'.hive'/'out'/r.kind, []
     out.mkdir(parents=True, exist_ok=True)
-    if not (top/'.hive'/'.gitignore').exists():
-        with suppress(OSError): (top/'.hive'/'.gitignore').write_text('*\n!config.toml\n!.gitignore\n')
+    if not (top/'.hive'/'out'/'.gitignore').exists():
+        with suppress(OSError): (top/'.hive'/'out'/'.gitignore').write_text('*\n')
     with open(out/'.lock', 'a') as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
         for a in arts:
@@ -483,8 +507,8 @@ class Worker:
     def reap(s):
         for r in s.q.q("SELECT * FROM runs WHERE state='running'"):
             if r.pg:
-                for sg in (signal.SIGCONT, signal.SIGKILL):
-                    with suppress(OSError): os.killpg(r.pg, sg)
+                tree = kids(r.pg)
+                for sg in (signal.SIGCONT, signal.SIGKILL): hit(r.pg, sg, tree)
         with s.q.tx() as c: c.execute("UPDATE runs SET state='queued',slot=NULL,pg=NULL WHERE state='running'")
 
     def run(s):
@@ -579,7 +603,7 @@ class Worker:
             p = subprocess.Popen(wrap(cmd, cfg['priority']), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True, pass_fds=tuple(x.fileno() for x in fds))
         with s.q.tx() as c: c.execute('UPDATE runs SET pg=? WHERE id=?', (p.pid, r.id))
-        peak, paused, held, why, last, active, wrote, w0 = 0., 0., None, '', time.monotonic()-1.9, 0., 0., time.monotonic()
+        peak, paused, held, why, last, active, wrote, w0, stopped = 0., 0., None, '', time.monotonic()-1.9, 0., 0., time.monotonic(), set()
         while p.poll() is None:
             time.sleep(.5)
             if (dt := time.monotonic()-last) >= 2:
@@ -592,18 +616,19 @@ class Worker:
                                                                                  'peak': round(peak)}), r.id))
             fr = free()
             if held is None and fr < cfg['floor']:
-                with suppress(OSError): os.killpg(p.pid, signal.SIGSTOP)
+                stopped = kids(p.pid)
+                hit(p.pid, signal.SIGSTOP, stopped)
                 held = time.monotonic()
             elif held is not None and fr >= cfg['floor']+10:
-                with suppress(OSError): os.killpg(p.pid, signal.SIGCONT)
+                hit(p.pid, signal.SIGCONT, stopped | kids(p.pid))
                 paused, held = paused+time.monotonic()-held, None
             hold = paused+(time.monotonic()-held if held else 0)
             why = why or ('timeout' if active > cfg['timeout'] else 'limit' if time.monotonic()-w0 > cfg['limit'] else 'paused' if hold > cfg['pausemax'] else '')
             if why:
-                for sg in (signal.SIGCONT, signal.SIGTERM):
-                    with suppress(OSError): os.killpg(p.pid, sg)
+                tree = kids(p.pid)
+                for sg in (signal.SIGCONT, signal.SIGTERM): hit(p.pid, sg, tree)
                 with suppress(subprocess.TimeoutExpired): p.wait(15)
-                with suppress(OSError): os.killpg(p.pid, signal.SIGKILL)
+                hit(p.pid, signal.SIGKILL, tree | kids(p.pid))
                 p.wait()
         code = p.returncode
         with open(lf, 'rb') as fh:

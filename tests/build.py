@@ -405,3 +405,22 @@ def testTimeoutsCountBuildingNotWaitingAndProgressShows(proj):
     kind(proj, 'stuckq', 'cmd = "sleep 30"\nlimit = 3')
     r = ask(proj, 'stuckq', wait=120)
     assert r['state'] == 'error' and 'overall limit' in r['stopped']
+
+
+def testDeliveredArtifactsNeverShowUpInGit(tmp_path):
+    (d := tmp_path/'plain').mkdir()
+    sh(d, 'init', '-q')
+    (d/'a.txt').write_text('x\n')
+    sh(d, 'add', 'a.txt')
+    sh(d, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'x')
+    h = home(project(d)[2])
+    (h/'config.toml').write_text('[build]\npriority = "normal"\nlinger = 3\n\n[build.kinds.build]\ncmd = "cp a.txt {cache}/a.out"\noutputs = ["{cache}/a.out"]\n')
+    assert ask(d, wait=120)['artifacts']
+    assert sh(d, 'status', '--porcelain') == ''
+
+
+def testMemoryCountsCompilersInTheirOwnProcessGroups(proj):
+    child = 'import os, time; os.setpgid(0, 0); x = bytearray(400*2**20); time.sleep(5)'
+    kind(proj, 'grp', f'cmd = [{json.dumps(sys.executable)}, "-c", {json.dumps(f"import subprocess, sys; subprocess.run([sys.executable, {chr(39)}-c{chr(39)}, {child!r}])")}]')
+    r = ask(proj, 'grp', wait=120)
+    assert r['ok'] and r['peak'] >= 300 and r.get('active', 0) >= 2, r

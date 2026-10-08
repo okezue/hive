@@ -15,9 +15,9 @@ CREATE TABLE IF NOT EXISTS asks(run INTEGER,root TEXT,by TEXT,ts REAL,got INTEGE
 CREATE TABLE IF NOT EXISTS stats(kind TEXT PRIMARY KEY,peak REAL,secs REAL,jobs INTEGER,n INTEGER);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,val TEXT)
 '''
-ADD = (('runs', 'pg', 'INTEGER'),)
+ADD = (('runs', 'pg', 'INTEGER'), ('runs', 'live', 'TEXT'))
 DEF = {'slots': 2, 'max': 2, 'free': 20, 'floor': 8, 'reserve': 2048, 'disk': 5, 'priority': 'low', 'jobs': 'auto', 'timeout': 3600, 'pausemax': 1800,
-       'linger': 120, 'inputs': [], 'env': {}, 'pass': []}
+       'idle': 256, 'limit': 86400, 'linger': 120, 'inputs': [], 'env': {}, 'pass': []}
 PASS = ('PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TMPDIR', 'DEVELOPER_DIR', 'SDKROOT', 'TOOLCHAINS', 'CC', 'CXX', 'CFLAGS', 'CXXFLAGS',
         'CPPFLAGS', 'LDFLAGS', 'RUSTFLAGS', 'RUSTC', 'RUSTUP_HOME', 'RUSTUP_TOOLCHAIN', 'CARGO_HOME', 'GOPATH', 'GOROOT', 'GOFLAGS', 'JAVA_HOME',
         'NODE_ENV', 'MACOSX_DEPLOYMENT_TARGET')
@@ -326,7 +326,7 @@ def queue(h): return Db(h/'queue.db', schema=SCHEMA, add=ADD)
 
 def show(r, pos=None, by=None):
     return {'build': f'b{r.id}', 'kind': r.kind, 'state': r.state} | ({'position': pos} if pos is not None else {}) | \
-        ({'by': by} if by else {}) | J(r.result, {})
+        ({'by': by} if by else {}) | ({'progress': J(r.live, {})} if r.state == 'running' and r.get('live') else {}) | J(r.result, {})
 
 
 def deliver(h, r, top):
@@ -415,8 +415,10 @@ def ask(root, kind=None, wait=120., by='', rid=None, force=False):
             with q.tx() as t: start(h, t)
         if time.monotonic() >= end:
             pos, cf = q.one("SELECT COUNT(*) n FROM runs WHERE state='queued' AND id<?", (rid,)).n, DEF | rj(h/'runs'/f'{rid}.json', {}).get('cfg', {})
+            lv = J(r.get('live'), {}) if r.state == 'running' else {}
             why = f' (waiting for free disk: {room(h):.0f} GB free, builds need {cf["disk"]})' if r.state == 'queued' and room(h) < cf['disk'] else \
-                f' (waiting for free memory: {free():.0f}% free, builds need {cf["free"]}%)' if r.state == 'queued' and free() < cf['free'] else ''
+                f' (waiting for free memory: {free():.0f}% free, builds need {cf["free"]}%)' if r.state == 'queued' and free() < cf['free'] else \
+                f" (building for {lv['active']}s; {lv['waiting']}s so far waiting inside its command, for example in a queue it wraps)" if lv else ''
             return show(r, pos) | {'hint': f'still {r.state}{why}; call build again with id="b{rid}" to wait for it'}
         time.sleep(.5)
 
@@ -563,7 +565,7 @@ class Worker:
                                                                              res['jobs'], (o.n if o else 0)+1))
 
     def go(s, r, f, k, cfg, d, src, cache, changed, t0, fds):
-        cfg = cfg | {x: k[x] for x in ('timeout', 'priority', 'floor', 'jobs', 'pausemax') if x in k}
+        cfg = cfg | {x: k[x] for x in ('timeout', 'priority', 'floor', 'jobs', 'pausemax', 'idle', 'limit') if x in k}
         jobs = s.jobs(r.kind, cfg)
         v = {'slot': d, 'src': src, 'cache': cache, 'jobs': jobs, 'root': f['top'], 'home': s.h}
         cwd = src/fill(k.get('cwd') or '.', v)
@@ -577,11 +579,17 @@ class Worker:
             p = subprocess.Popen(wrap(cmd, cfg['priority']), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                  start_new_session=True, pass_fds=tuple(x.fileno() for x in fds))
         with s.q.tx() as c: c.execute('UPDATE runs SET pg=? WHERE id=?', (p.pid, r.id))
-        peak, paused, held, why, last = 0., 0., None, '', time.monotonic()-1.9
+        peak, paused, held, why, last, active, wrote, w0 = 0., 0., None, '', time.monotonic()-1.9, 0., 0., time.monotonic()
         while p.poll() is None:
             time.sleep(.5)
-            if time.monotonic()-last >= 2:
-                last, peak = time.monotonic(), max(peak, group(p.pid))
+            if (dt := time.monotonic()-last) >= 2:
+                last, mb = time.monotonic(), group(p.pid)
+                peak, active = max(peak, mb), active + (dt if held is None and mb >= cfg['idle'] else 0)
+                if time.monotonic()-wrote > 10:
+                    wrote = time.monotonic()
+                    with suppress(Exception), s.q.tx() as c:
+                        c.execute('UPDATE runs SET live=? WHERE id=?', (dumps({'active': round(active), 'waiting': round(time.monotonic()-w0-active-paused),
+                                                                                 'peak': round(peak)}), r.id))
             fr = free()
             if held is None and fr < cfg['floor']:
                 with suppress(OSError): os.killpg(p.pid, signal.SIGSTOP)
@@ -590,7 +598,7 @@ class Worker:
                 with suppress(OSError): os.killpg(p.pid, signal.SIGCONT)
                 paused, held = paused+time.monotonic()-held, None
             hold = paused+(time.monotonic()-held if held else 0)
-            why = why or ('timeout' if now()-t0-hold > cfg['timeout'] else 'paused' if hold > cfg['pausemax'] else '')
+            why = why or ('timeout' if active > cfg['timeout'] else 'limit' if time.monotonic()-w0 > cfg['limit'] else 'paused' if hold > cfg['pausemax'] else '')
             if why:
                 for sg in (signal.SIGCONT, signal.SIGTERM):
                     with suppress(OSError): os.killpg(p.pid, sg)
@@ -616,7 +624,8 @@ class Worker:
         stable = code == 0 or (code is not None and 0 < code < 126 and errs and not why)
         return {'cache': bool(stable), 'ok': code == 0, 'code': code, 'secs': round(now()-t0, 1), 'slot': int(d.name), 'synced': changed, 'jobs': jobs,
                 'peak': round(peak or 50.)} | ({'paused': round(paused)} if paused else {}) | \
-            ({'timedOut': cfg['timeout']} if why == 'timeout' else {'stopped': f"paused for over {cfg['pausemax']}s"} if why else {}) | \
+            ({'timedOut': cfg['timeout']} if why == 'timeout' else {'stopped': f"ran past its overall limit of {cfg['limit']}s"} if why == 'limit' else
+             {'stopped': f"paused for over {cfg['pausemax']}s"} if why else {}) | ({'active': round(active)} if active else {}) | \
             ({'errors': errs[:40], 'errorCount': len(errs)} if errs else {}) | ({'warnings': len(ds)-len(errs)} if len(ds) > len(errs) else {}) | \
             ({'artifacts': arts} if arts else {}) | ({'tail': '\n'.join(text.rstrip().splitlines()[-30:])} if code != 0 and not errs else {}) | \
             {'log': str(lf)}

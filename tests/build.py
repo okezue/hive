@@ -134,7 +134,7 @@ def testCrashedSyncNeverLeavesStaleSourcesBehind(proj):
 
 def testTimeoutsKillTheBuildAndAreNotCached(proj):
     c = proj/'.hive'/'config.toml'
-    c.write_text(c.read_text().replace('[build.kinds.slow]', '[build.kinds.slow]\ntimeout = 2'))
+    c.write_text(c.read_text().replace('[build.kinds.slow]', '[build.kinds.slow]\ntimeout = 2\nidle = 0'))
     r = ask(proj, 'slow', wait=120)
     assert r['state'] == 'error' and r['timedOut'] == 2 and not r['ok']
     assert not ask(proj, 'slow', wait=0).get('cached')
@@ -394,3 +394,14 @@ def testAutoDetectedProjectsAreNotAdvertisedInBriefs(tmp_path):
     (d/'Cargo.toml').write_text('[package]\nname = "x"\n')
     sh(d, 'init', '-q')
     assert 'with `build`' not in Hive.open(d/'.hive'/'hive.db', d).join('r', 'implementer').welcome()['brief']
+
+
+def testTimeoutsCountBuildingNotWaitingAndProgressShows(proj):
+    kind(proj, 'queued', 'cmd = "sleep 6; echo ok"\ntimeout = 2\nlimit = 60')
+    r = ask(proj, 'queued', wait=4)
+    assert r['state'] == 'running' and 'waiting inside its command' in r['hint'], r
+    r = ask(proj, rid=r['build'], wait=120)
+    assert r['ok'] and r['state'] == 'done'
+    kind(proj, 'stuckq', 'cmd = "sleep 30"\nlimit = 3')
+    r = ask(proj, 'stuckq', wait=120)
+    assert r['state'] == 'error' and 'overall limit' in r['stopped']

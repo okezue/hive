@@ -365,7 +365,7 @@ def start(h, n, prompt='', role='implementer', name=None, task=None, headless=Fa
         taken = {a.name for a in h.agents.all()}
         x = h.join(name or next(k for k in (n, *(f'{n}{i}' for i in range(2, 999))) if k not in taken), role, wf, about=f'{n} session started from the hive CLI')
         a = x.agent
-        b0 = brief(a.name, a.role, h.roles.get(a.role).charter, a.token, ready(h.root))
+        b0 = brief(a.name, a.role, h.roles.get(a.role).charter, a.token, ready(h.root), h.egregore.on)
         body = f'{b0}\n\n{prompt}' if prompt else b0 + '\n\nThe user talks to you in this terminal; wait for their instructions.' \
             if headless or not (n in H and hooked(n, h.root)) else ''
     a = x.agent

@@ -8,6 +8,7 @@ from .board import Board
 from .cfg import IGNORE, load, locate
 from .db import Db
 from .disk import Disk
+from .egregore import Egregore
 from .err import Missing
 from .fault import Faults
 from .files import Files
@@ -40,6 +41,7 @@ class Hive:
         s.tree = Tree(s.db, s.log, s.mail, s.agents, s.roles, s.tasks, s.summ, cfg)
         s.know = Know(s)
         s.faults = Faults(s)
+        s.egregore = Egregore(s)
         s.tree.tips, s.tree.run = s.know.tips, s.autorun
         if (d := cfg.dir).name == '.hive' and not (d/'.gitignore').exists():
             with suppress(OSError): (d/'.gitignore').write_text(IGNORE)

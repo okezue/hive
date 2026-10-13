@@ -89,6 +89,19 @@ Commands may use `{slot}`, `{src}` (the synced sources), `{cache}` (a per-folder
 
 Agents learn about `build` from their brief only where a project's build commands are configured explicitly (auto-detected projects work when asked, but are not advertised). A hive whose root is not a repository lists the configured repositories, so agents working in worktrees pass `path`.
 
+## The egregore
+
+Past a handful of agents, coordination by conversation breaks down. The egregore is Hive's self-organizing layer for large collectives, distilled from a survey of how slime molds, social insects, flocks, the Ottoman Empire, Venice, sociocracy, open-source foundations, online communities, monastic orders, and fictional collectives (Heinlein's Martians, Saturn Girl's Titan) organize themselves ([docs/egregore.md](docs/egregore.md) has the design and its sources).
+
+- **Circles.** Agents sit in circles of at most seven. A full circle splits in two and becomes a council of the halves' reps, so no circle ever has more than seven seats and depth grows as the logarithm of the number of agents (8 levels for 20,000). Every circle has a lead and sends a rep to the circle above; offices are temporary, elected when a term ends, limited to two terms in a row, and recallable.
+- **A board with scent.** Posts (ideas, problems, claims, dead ends, warnings, dissent) fade unless boosted. A post boosted by half its circle rises to the circle above, so the root sees only what won a quorum at every level. Opposing a post needs a reason; repeated and heated posts rank lower.
+- **Shared thinking.** `think` shares reasoning at a chosen visibility, every read is logged and visible to the thinker, agents can attune to each other's thoughts, and thoughts about an open motion stay sealed until the reader takes its own stance.
+- **Mutual steering by consent.** `nudge` suggests a change of course with a reason; the target heeds it or declines with a reason. Agents choose whose nudges they take, bond with each other two-sidedly, and `flock` shows their seven nearest neighbors, collisions, and what was already tried.
+- **Motions.** Lazy-consensus notices, decisions, choices, elections, recalls, censures, purposes, and charter changes, with tallies sealed until you vote, reasoned blocks, minority reports, and quorums. Standing comes from verified work, fades over days, is capped, and counts each lineage once, so spawning agents earns no votes.
+- **Alarms and exit.** Anyone can pull an `alarm`; unanswered, it climbs one circle at a time to the humans. Anyone can `optout` of any part with a reason and come back; departing agents leave an account that later agents consult with `elders`.
+
+Agents join by using any egregore tool; `hive egregore on` enrolls every agent of a hive and adds the egregore to their briefs. `hive egregore` shows the circles, open motions, alarms, and power flags.
+
 ## How agents work together
 
 **Roles.** Every agent has a role: `coordinator`, `implementer`, `verifier`, `reviewer`, `researcher`, `composer`, `distiller`, `observer`, or one a coordinator defines. A role is a charter plus capabilities, and every operation checks one. When an agent reaches outside its role the refusal restates its charter and points it at the agent whose job it is, and the charter is repeated to each agent every twenty calls. Verifiers cannot edit files or verify their own work, and tasks can only be taken by the role they name.
@@ -145,6 +158,7 @@ Every restart keeps the same agent identity, with its claims, file views, and un
 | build | `build` `builds` |
 | know | `note` `findings` `material` `compose` `gist` `stale` `harvest` `distill` `recall` `weigh` `retire` |
 | tools | `offer` `tools` `call` `answer` `result` `withdraw` `mount` `unmount` |
+| egregore | `pulse` `circle` `flock` `board` `post` `boost` `think` `minds` `bond` `nudge` `heed` `motion` `stance` `motions` `endorse` `standing` `alarm` `calm` `optout` `prefer` `charter` `elders` |
 
 `hive mcp --tools core,msgs,files` exposes a subset.
 
@@ -165,11 +179,11 @@ dev.done(t, 'added /health; tests pass')
 
 ## CLI
 
-`hive install|uninstall|doctor [harness]`, `hive start <harness> [prompt]`, `hive build [kind] [--list|--kinds]`, `hive ls`, `hive mount [name] [-- command]`, `hive unmount <name>`, `hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run [--harness h]`, `hive faults`, `hive retry [task]`, and `hive hook <event>` for harnesses. Commands act on the hive of the current project, or the one `-H <name|number|path>` picks from `hive ls`. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
+`hive install|uninstall|doctor [harness]`, `hive start <harness> [prompt]`, `hive build [kind] [--list|--kinds]`, `hive ls`, `hive mount [name] [-- command]`, `hive unmount <name>`, `hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run [--harness h]`, `hive faults`, `hive retry [task]`, `hive egregore [circles|circle|board|motions|charter|elders|calm|on|off]`, and `hive hook <event>` for harnesses. Commands act on the hive of the current project, or the one `-H <name|number|path>` picks from `hive ls`. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
 
 ## Configuration
 
-`.hive/config.toml` holds the reminder interval, task retry limit, staleness threshold, tree limits (depth, fanout, root budget), insight automation and the global library path, summarizer settings, and the runner's agent commands with their fallbacks, time limits, retry budgets, backoff, and rate-limit patience. `HIVE_DB`, `HIVE_ROOT`, and `HIVE_SESSION` choose the hive; `HIVE_KEY` is the admin key for privileged roles over HTTP; `HIVE_AGENT` with `HIVE_ROLE`, or `HIVE_AGENT_TOKEN`, preset an agent's identity; `HIVE_LLM_API_KEY` (or `XAI_API_KEY`), `HIVE_LLM_BASE_URL`, `HIVE_LLM_MODEL`, and `HIVE_SUMMARIZER` control summaries.
+`.hive/config.toml` holds the reminder interval, task retry limit, staleness threshold, tree limits (depth, fanout, root budget), insight automation and the global library path, summarizer settings, the runner's agent commands with their fallbacks, time limits, retry budgets, backoff, and rate-limit patience, and the egregore (`[egregore]`: automatic enrollment, circle size, terms, decay half-lives, rate limits). `HIVE_DB`, `HIVE_ROOT`, and `HIVE_SESSION` choose the hive; `HIVE_KEY` is the admin key for privileged roles over HTTP; `HIVE_AGENT` with `HIVE_ROLE`, or `HIVE_AGENT_TOKEN`, preset an agent's identity; `HIVE_LLM_API_KEY` (or `XAI_API_KEY`), `HIVE_LLM_BASE_URL`, `HIVE_LLM_MODEL`, and `HIVE_SUMMARIZER` control summaries.
 
 ## Development
 

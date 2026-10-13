@@ -1,4 +1,4 @@
-import argparse, json, os, sqlite3, sys, time
+import argparse, json, os, re, sqlite3, sys, time
 from pathlib import Path
 
 from . import __version__
@@ -286,6 +286,50 @@ def build(a):
     return 3 if r['state'] in ('queued', 'running') else 0 if r.get('ok') else 1
 
 
+def switch(h, on):
+    p, v = h.cfg.dir/'config.toml', f"auto = {'true' if on else 'false'}"
+    t = p.read_text() if p.exists() else ''
+    if m := re.search(r'(?m)^\[egregore\][^\n]*\n?', t):
+        e = m.end() + (n.start() if (n := re.search(r'(?m)^\[', t[m.end():])) else len(t)-m.end())
+        sec = t[m.end():e]
+        sec = re.sub(r'(?m)^auto\s*=.*$', v, sec, count=1) if re.search(r'(?m)^auto\s*=', sec) else f'{v}\n{sec}'
+        t = t[:m.end()] + ('' if t[:m.end()].endswith('\n') else '\n') + sec + t[e:]
+    else: t += ('\n' if t and not t.endswith('\n') else '') + f'\n[egregore]\n{v}\n'
+    p.write_text(t)
+    print(f"egregore {'on: every agent joining' if on else 'off: only agents using its tools join'} {h.root} ({p}); agents that start from now on see it")
+
+
+def egregore(a):
+    h, v, x = opened(a), a.view, a.args
+    if v in ('on', 'off'): return switch(h, v == 'on')
+    e = h.egregore
+    if v == 'calm':
+        if len(x) < 2: raise Bad('hive egregore calm <alarm> <note>')
+        r = actor(h, a).calm(x[0], ' '.join(x[1:]))
+    elif v == 'charter': r = e.charter(int(x[0]) if x else None)
+    elif v == 'elders': r = e.elders(' '.join(x))
+    elif v == 'circle': r = e.show(e.named(x[0]).id if x else 1)
+    elif v == 'circles': r = e.tree(e.named(x[0]).id if x else 1, a.depth)
+    elif v == 'board': r = actor(h, a).board(where=x[0] if x else 'egregore', limit=a.limit)
+    elif v == 'motions': r = actor(h, a).motions(state=x[1] if len(x) > 1 else 'open', where=x[0] if x else 'egregore', limit=a.limit)
+    else: r = e.view(a.depth)
+    if a.json or v not in ('pulse', 'circles', 'charter'): return dump(r)
+    if v == 'charter': return print(f"charter v{r['version']} (adopted {r['adopted']})\n\n{r['charter']}")
+
+    def walk(n, d=0):
+        print(f"{'  '*d}{n['circle']} ({n['agents']} agents)" + (f", lead {n['lead']}" if n.get('lead') else '') +
+              (f", {n['sub-circles']} sub-circles below" if n.get('sub-circles') else ''))
+        for k in n.get('sub', []): walk(k, d+1)
+    if v == 'circles': return walk(r)
+    st = r['egregore']
+    print(f"egregore: {st['agents']} agents in {st['circles']} circles, charter {st['charter']}, {st['open motions']} open motions, {st['open alarms']} open alarms"
+          + ('' if e.on else '  (auto off: agents join by using its tools; hive egregore on enrolls everyone)'))
+    walk(r['circles'])
+    for m in r['motions']: print(f"  {m['motion']} [{m['kind']}] in {m['circle']}: {m['text']}")
+    for al in r['alarms']: print(f"  {al['alarm']} {al['state']} at {al['at']} by {al['by']}: {al['text']}")
+    if fl := r['power'].get('flags'): print('  power: ' + '; '.join(fl))
+
+
 def parser():
     p = argparse.ArgumentParser(prog='hive')
     p.add_argument('--version', action='version', version=__version__)
@@ -339,6 +383,8 @@ def parser():
     cmd(build, opt('kind', nargs='?'), opt('--wait', type=float, default=3600), opt('--id'), opt('--list', action='store_true'),
         opt('--limit', type=int, default=10), opt('--kinds', action='store_true'), opt('--json', action='store_true'), opt('--force', action='store_true'),
         opt('--work', help=argparse.SUPPRESS))
+    cmd(egregore, opt('view', nargs='?', default='pulse', choices=['pulse', 'circles', 'circle', 'board', 'motions', 'charter', 'elders', 'calm', 'on', 'off']),
+        opt('args', nargs='*'), opt('--depth', type=int, default=2), opt('--limit', type=int, default=20), opt('--json', action='store_true'), who=True)
     return p
 
 

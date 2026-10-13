@@ -318,7 +318,41 @@ def depth(c):
     c(not [a.name for a in ag.values() if a.state == 'pending' and not a.calls], 'no helper was left unstarted')
 
 
-SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover, 'plug': plug, 'depth': depth}
+def egregore(c):
+    d = workspace('egregore', {'README.md': '# tokenizer\n\nA new module splits source text into tokens. It needs a name.\n'})
+    subprocess.run([HIVE, 'egregore', 'on'], cwd=d, capture_output=True, check=True)
+    how = ('You share this folder with two other agents, and together you form a circle of the hive\'s egregore. Use only the hive MCP tools. '
+           'Start with hive pulse. The circle must choose the name of the new module described in README.md: "lexer" or "scanner". '
+           '1) Post one idea arguing for a name with hive post (kind idea), with a concrete reason. 2) Record your reasoning with hive think before you vote. '
+           '3) Read hive board and boost at least one post by another agent that you find convincing (hive boost with why). '
+           '4) Nudge one other agent with hive nudge about something useful, and answer every nudge you receive with hive heed. '
+           '5) Take a stance on the circle\'s choice motion with hive stance, giving why; until it exists, call hive wait(secs=30) and then hive motions. '
+           'Never vote for something before you have posted and thought. 6) When the motion is settled (hive motions(state="all") shows its result), '
+           'reply with the chosen name and one sentence on how the circle decided.')
+    together(lambda: agent(d, 'ada', 'implementer', f'You are ada. {how} You open the motion: after posting, call hive motion(kind="choice", '
+                                                    'options=["lexer", "scanner"], text="Name the tokenizer module").', 40, 1500),
+             lambda: agent(d, 'ben', 'implementer', f'You are ben. {how}', 40, 1500),
+             lambda: agent(d, 'cyd', 'implementer', f'You are cyd. {how}', 40, 1500))
+    h = Hive.open(d/'.hive'/'hive.db', d)
+    e, ids = h.egregore, {n: h.agents.named(n).id for n in ('ada', 'ben', 'cyd')}
+    c(e.on and all(e.joined(i) for i in ids.values()), 'all three agents joined the egregore')
+    c(len({e.home(i) for i in ids.values()}) == 1, 'they share one circle')
+    by = {n: h.db.one("SELECT COUNT(*) k FROM posts WHERE agent=? AND kind!='exit'", (i,)).k for n, i in ids.items()}
+    c(all(by.values()), f'every agent posted: {by}')
+    bs = h.db.q('SELECT b.agent FROM boosts b JOIN posts p ON p.id=b.post WHERE p.agent!=b.agent AND b.w>0')
+    c(len({x.agent for x in bs}) >= 2, f'at least two agents boosted others\' posts ({len(bs)} boosts)')
+    c(h.db.one('SELECT COUNT(DISTINCT agent) k FROM thoughts').k >= 2, 'at least two agents shared their reasoning')
+    ns = h.db.q('SELECT * FROM nudges')
+    c(ns and any(n.state in ('heeded', 'declined') for n in ns), f'nudges were sent and answered: {[n.state for n in ns]}')
+    m = h.db.one("SELECT * FROM motions WHERE kind='choice' ORDER BY id LIMIT 1")
+    st = h.db.q('SELECT agent,why FROM stances WHERE motion=?', (m.id,)) if m else []
+    c(m and len(st) == 3 and all(x.why for x in st), f'all three took a reasoned stance on the choice motion ({len(st)} stances)')
+    c(m and m.state == 'passed' and json.loads(m.result).get('choice') in ('lexer', 'scanner'), f"the motion settled: {m and m.state} {m and m.result}")
+    c(h.db.one("SELECT 1 FROM posts WHERE kind='resolution'"), 'the resolution was posted to the board')
+    h.close()
+
+
+SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover, 'plug': plug, 'depth': depth, 'egregore': egregore}
 
 
 def main():

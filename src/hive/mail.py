@@ -18,7 +18,7 @@ class Mail:
         ids = [c.execute('INSERT INTO msgs(src,dst,kind,mode,body,data,thread,re,ts) VALUES(?,?,?,?,?,?,?,?,?)',
                          (src and src.id, x, kind, mode, body, d, thread, re, ts)).lastrowid for x in dsts]
         if log and ids:
-            names = s.agents.names()
+            names = s.agents.lazy()
             s.log.add(c, src and src.id, 'msg.'+kind, f"to {', '.join(names.get(x, '?') for x in dsts)} ({mode}): {line(body, 120)}",
                       f'thread:{thread}' if thread else None, {'ids': ids}, src and src.wf)
         return ids

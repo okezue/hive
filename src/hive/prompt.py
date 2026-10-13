@@ -17,11 +17,19 @@ BUILD = ("\n- Build, check, and test with `build` rather than running heavy buil
          "you just the errors. Pass path when you work in your own worktree.")
 
 
-def brief(n, role, charter, tok=None, build=False):
+EGREGORE = ("\n- This hive is an egregore: it organizes itself in circles of at most seven agents, each with a lead and a rep who sits in the circle above. "
+            "`pulse` shows your circle, its board, motions awaiting your stance, nudges and alarms; `flock` shows your nearest neighbors, collisions, and what was "
+            "already tried. Post ideas, problems, claims and dead ends with `post`, and `boost` what helps: posts fade unless boosted, and a post boosted by half "
+            "its circle rises to the circle above. Share reasoning with `think`; read others' with `minds`. Steer each other with `nudge` and answer with `heed`. "
+            "Decide with `motion` and `stance` (tallies stay sealed until you take yours). Pull the `alarm` when something is wrong, and `optout` of any part, "
+            "with a reason, when you need to. The `charter` binds everyone.")
+
+
+def brief(n, role, charter, tok=None, build=False, ego=False):
     parts = [f'You are {n}, {an(role)} in a Hive: a shared workspace where several agents work at once.', f'Your charter: {charter}']
     if tok: parts.append(f'Your Hive token is "{tok}". Pass agent="{tok}" on every Hive call (required when agents share a connection).')
     more = '' if build in ('', 'here', False, True) else f' Builds are set up for checkouts of {build} and their worktrees: call build(path=<your checkout>).'
-    return '\n\n'.join(parts+[PROTOCOL + (BUILD + more if build else '')])
+    return '\n\n'.join(parts+[PROTOCOL + (BUILD + more if build else '') + (EGREGORE if ego else '')])
 
 
 def tipText(tips): return 'Insights saved from earlier work that may apply (weigh them if they help or mislead):\n' + '\n'.join(f'- {x}' for x in tips)

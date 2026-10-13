@@ -15,7 +15,7 @@ from .merge import lines as split
 from .prompt import brief, task as taskPrompt
 from .util import J, ago, dumps, line, now, pid, poll
 
-TOPICS = ('file:', 'context:', 'agent:', 'task:', 'tool:', 'thread:', 'kind:')
+TOPICS = ('file:', 'context:', 'agent:', 'task:', 'tool:', 'thread:', 'kind:', 'circle:')
 
 
 class Edit(TypedDict):
@@ -71,7 +71,7 @@ class Sess:
     def welcome(s):
         a = s.agent
         o = s.hive.aware.overview(a)
-        return {'agent': a.name, 'token': a.token, 'role': a.role, 'brief': brief(a.name, a.role, s.hive.roles.get(a.role).charter, a.token, ready(s.hive.root)),
+        return {'agent': a.name, 'token': a.token, 'role': a.role, 'brief': brief(a.name, a.role, s.hive.roles.get(a.role).charter, a.token, ready(s.hive.root), s.hive.egregore.on),
                 'others': [x for x in o['agents'] if not x.get('you')], 'tasks': o['tasks']['counts']}
 
     def progress(s, text: str, state: str | None = None):
@@ -332,7 +332,7 @@ class Sess:
         a, h = kid.agent, s.hive
         if a.launch: return h.tree.prompt(a)
         t = h.tasks.get(i)
-        return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token, ready(h.root)), h.tasks.show(t, full=True),
+        return taskPrompt(brief(a.name, a.role, h.roles.get(a.role).charter, a.token, ready(h.root), h.egregore.on), h.tasks.show(t, full=True),
                           h.tasks.context(a, i).get('dependencies'), None if t.kind == 'verify' else h.know.tips(f'{t.title} {t.about}'), sub)
 
     def define(s, name: str, charter: str, caps: list[str]):
@@ -450,3 +450,56 @@ class Sess:
     def result(s, id: str, wait: float = 0): return s.hive.tools.result(s._me(), id, wait)
 
     def withdraw(s, name: str): return s.hive.tools.withdraw(s._me(), name)
+
+    def pulse(s): return s.hive.egregore.pulse(s._me())
+
+    def circle(s, of: str | None = None, join: str | None = None, depth: int = 0): return s.hive.egregore.circle(s._me(), of, join, max(0, min(depth, 6)))
+
+    def flock(s, k: int = 7): return s.hive.egregore.flock(s._me(), max(1, min(k, 20)))
+
+    def board(s, where: str | None = None, kind: str | None = None, query: str = '', post: str | None = None, limit: int = 20):
+        return s.hive.egregore.board(s._me(), where, kind, query, post, max(1, min(limit, 50)))
+
+    def post(s, text: str, kind: str = 'idea', title: str = '', where: str | None = None, re: str | None = None, anon: bool = False):
+        return s.hive.egregore.post(s._me(), text, kind, title, where, re, anon)
+
+    def boost(s, post: str, why: str = '', against: bool = False): return s.hive.egregore.boost(s._me(), post, why, against)
+
+    def think(s, text: str, about: str = '', vis: str | None = None): return s.hive.egregore.think(s._me(), text, about, vis)
+
+    def minds(s, of: str | None = None, since: str | None = None, limit: int = 20, readers: bool = False, attune: bool | None = None):
+        return s.hive.egregore.minds(s._me(), of, since, max(1, min(limit, 50)), readers, attune)
+
+    def bond(s, who: str, action: str = 'offer'): return s.hive.egregore.bond(s._me(), who, action)
+
+    def nudge(s, to: str, text: str, why: str = ''): return s.hive.egregore.nudge(s._me(), to, text, why)
+
+    def heed(s, nudge: str, accept: bool = True, reply: str = ''): return s.hive.egregore.heed(s._me(), nudge, accept, reply)
+
+    def motion(s, text: str, kind: str = 'decision', options: list[str] | None = None, where: str | None = None, target: str | None = None,
+               closes: float | None = None):
+        return s.hive.egregore.motion(s._me(), text, kind, options, where, target, closes)
+
+    def stance(s, motion: str, stance: str, why: str = ''): return s.hive.egregore.stance(s._me(), motion, stance, why)
+
+    def motions(s, state: str = 'open', where: str | None = None, limit: int = 20): return s.hive.egregore.motions(s._me(), state, where, max(1, min(limit, 50)))
+
+    def endorse(s, who: str, why: str, ref: str = ''): return s.hive.egregore.endorse(s._me(), who, why, ref)
+
+    def standing(s, of: str | None = None): return s.hive.egregore.standing(s._me(), of)
+
+    def alarm(s, text: str): return s.hive.egregore.alarm(s._me(), text)
+
+    def calm(s, alarm: str, note: str): return s.hive.egregore.calm(s._me(), alarm, note)
+
+    def optout(s, part: str = 'all', why: str = '', undo: bool = False): return s.hive.egregore.optout(s._me(), part, why, undo)
+
+    def prefer(s, vis: str | None = None, nudges: str | None = None): return s.hive.egregore.prefer(s._me(), vis, nudges)
+
+    def charter(s, version: int | None = None):
+        s._me()
+        return s.hive.egregore.charter(version)
+
+    def elders(s, query: str = '', limit: int = 10):
+        s._me()
+        return s.hive.egregore.elders(query, max(1, min(limit, 50)))

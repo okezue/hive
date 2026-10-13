@@ -56,6 +56,8 @@ class Agents:
 
     def names(s): return {r.id: r.name for r in s.db.q('SELECT id,name FROM agents')}
 
+    def lazy(s): return Names(s.db)
+
     def hosted(s, a): return a.launch == 'host' or (not a.launch and bool(a.deleg) and not a.pid)
 
     def home(s, a):
@@ -109,3 +111,12 @@ class Agents:
             w = s.wfId(to[9:])
             return [a for a in live if a.wf == w]
         return [s.named(to)]
+
+
+class Names(dict):
+    def __init__(s, db): s.db = db
+
+    def get(s, k, d=None):
+        if k is None: return d
+        if k not in s: s[k] = (r := s.db.one('SELECT name FROM agents WHERE id=?', (k,))) and r.name
+        return dict.get(s, k) or d

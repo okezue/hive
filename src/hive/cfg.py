@@ -44,6 +44,11 @@ backoff = [5, 600]   # first and longest wait between retries, in seconds; rate 
 # harness = "claude"
 # fallback = ["codex", ["my-agent", "--prompt", "{prompt}"]]
 
+[egregore]
+auto = false         # true enrolls every agent in the egregore (circles, board, motions); otherwise agents join by using its tools
+# cap = 7            # seats per circle; full circles split in two
+# term = 14400       # seconds an elected office lasts
+
 # Your own harness, usable wherever a harness name goes: run is the headless command, chat the interactive one
 # [harness.mine]
 # run = ["mine", "-p", "{prompt}"]
@@ -65,6 +70,7 @@ class Cfg:
     budget: int = 32
     insights: dict = field(default_factory=dict)
     harness: dict = field(default_factory=dict)
+    egregore: dict = field(default_factory=dict)
 
     @property
     def dir(s): return s.db.parent.parent if s.db.parent.name == 'sessions' else s.db.parent
@@ -105,7 +111,7 @@ def load(db=None, root=None, session=None, cwd=None):
     h, t = st.get('hive', {}), st.get('tree', {})
     return Cfg(db, root, int(h.get('reminder', 20)), int(h.get('tries', 2)), float(h.get('stale', 900)),
                dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 8)), int(t.get('budget', 32)),
-               dict(st.get('insights', {})), dict(st.get('harness', {})))
+               dict(st.get('insights', {})), dict(st.get('harness', {})), dict(st.get('egregore', {})))
 
 
 def init(root):

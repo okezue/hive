@@ -14,6 +14,7 @@ GROUPS = {
     'know': 'note findings material compose gist stale harvest distill recall weigh retire',
     'tools': 'offer tools call answer result withdraw mount unmount',
     'build': 'build builds',
+    'egregore': 'pulse circle flock board post boost think minds bond nudge heed motion stance motions endorse standing alarm calm optout prefer charter elders',
 }
 NAME = re.compile(r'^[A-Za-z][\w.-]{0,63}$')
 

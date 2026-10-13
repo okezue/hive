@@ -1,3 +1,5 @@
+from contextlib import suppress
+
 from .log import match
 from .mail import show
 from .util import ago, an, line, now
@@ -7,10 +9,10 @@ CAP, SCAN, LATE, QUIET = 8, 500, 600, 900
 
 class Notice:
     def __init__(s, mail, log, agents, roles, mrs, every):
-        s.mail, s.log, s.agents, s.roles, s.mrs, s.every = mail, log, agents, roles, mrs, every
+        s.mail, s.log, s.agents, s.roles, s.mrs, s.every, s.more = mail, log, agents, roles, mrs, every, []
 
     def __call__(s, a, eat=True):
-        names, out = s.agents.names(), {}
+        names, out = s.agents.lazy(), {}
         if urgent := s.mail.urgent(a.id):
             fresh = [m for m in urgent if m.seenAt is None]
             out['interrupts'] = [show(m, names) for m in fresh] + [
@@ -30,6 +32,8 @@ class Notice:
         if s.every and a.calls and a.calls % s.every == 0:
             r = s.roles.get(a.role)
             out['roleReminder'] = f"You are {a.name}, {an(r.name)}. {r.charter}" + (f' Your task is t{a.task}.' if a.task else '')
+        for f in s.more:
+            with suppress(Exception): out |= f(a, eat) or {}
         return out
 
     def helpers(s, a):
@@ -71,4 +75,4 @@ class Notice:
             out.append(x)
         return out + ([f'... {len(hit)-CAP} more; digest has the rest'] if len(hit) > CAP else [])
 
-    def pending(s, a): return bool(s.mail.unread(a.id) or s.scan(a, s.agents.names(), True)[1])
+    def pending(s, a): return bool(s.mail.unread(a.id) or s.scan(a, s.agents.lazy(), True)[1])

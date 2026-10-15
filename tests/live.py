@@ -10,7 +10,7 @@ import hive.harness as harness
 import hive.hook as hook
 import hive.live as live
 from hive.cfg import NOLIMIT
-from hive.run import Runner
+from hive.run import Job, Runner
 from hive.srv import build as server
 
 
@@ -162,9 +162,11 @@ def testRunnerHoldsNewAgentsWhenMemoryIsShort(hive, monkeypatch):
     assert r.cap == float('inf')
     monkeypatch.setattr(build, 'free', lambda: 80.)
     assert not r.full()
-    r.warm = [time.time()]*10**4
-    assert r.full() and len(said) == 1, 'agents still warming up count against free memory'
-    r.warm = []
+    r.jobs = {i: Job('x', i, 1, None, None, None, time.time()) for i in range(10**4)}
+    assert r.full() and len(said) == 1, 'running agents still warming up count against free memory'
+    r.jobs = {i: Job('x', i, 1, None, None, None, time.time()-61) for i in range(10)}
+    assert not r.full(), 'agents past their first minute already show in free memory'
+    r.jobs = {}
     assert not r.full()
     monkeypatch.setattr(build, 'free', lambda: 20.5)
     assert r.full() and r.full() and len(said) == 2 and 'free memory is 2' in said[1], 'it says so once each time it starts holding'

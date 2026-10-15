@@ -68,7 +68,7 @@ class Runner:
     def __init__(s, hive, cmds, cap=0, poll=1., op=None, say=None, env=None, watch=False, budget=4, handed=False, linger=0., **pol):
         if bad := set(pol)-set(POL): raise TypeError(f"unknown runner settings: {', '.join(sorted(bad))}")
         s.hive, s.cap, s.poll, s.env, s.watch, s.budget, s.hn, s.ok, s.warned = hive, cap if cap > 0 else INF, poll, env or {}, watch, budget, {}, set(), set()
-        s.handed, s.linger, s.warm, s.held = handed, linger, [], None
+        s.handed, s.linger, s.held = handed, linger, None
         s.free, s.per = float(hive.cfg.runner.get('free', 20)), float(hive.cfg.runner.get('per', 800))
         s.picked = not cmds
         if not cmds and (f := found(hive.cfg)):
@@ -143,10 +143,9 @@ class Runner:
     def full(s):
         # agents blocked in gather or wait hold a process but not a slot, so parents waiting on children cannot starve them
         if len([j for j in s.jobs if j not in s.idle]) >= s.cap or len(s.jobs) >= s.cap*(s.hive.cfg.depth+2): return True
-        # agents started in the last minute are still growing, so their expected memory counts against what is free
+        # running agents started in the last minute are still growing, so their expected memory counts against what is free
         from .build import fits, free
-        s.warm = [t for t in s.warm if now()-t < 60]
-        if fits(s.free, s.per, len(s.warm)): s.held = None
+        if fits(s.free, s.per, sum(now()-j.at < 60 for j in s.jobs.values())): s.held = None
         elif s.held is None:
             s.held = now()
             s.say(f'holding new agents: free memory is {free():.0f}%, and Hive keeps {s.free:.0f}% free')
@@ -251,7 +250,6 @@ class Runner:
             s.settle(Job(n, a.id, t.id, None, log, None, now(), k, 'setup', f'could not start {argv[0]}: {e}'), None)
             raise Err(f'could not start {argv[0]}: {e}') from None
         at = stamp(p.pid)
-        s.warm.append(t0)
         with h.db.tx() as c:
             if a.launch and not b: c.execute('UPDATE tasks SET tries=tries+1 WHERE id=?', (t.id,))
             h.agents.set(c, a.id, state='active', pid=p.pid, pidAt=at, **({'harness': hn} if hn else {}))

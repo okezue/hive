@@ -78,8 +78,9 @@ def testHookRestartsAnOldServerOnceAndTellsTheModel(monkeypatch, capsys, tmp_pat
     fake = subprocess.Popen([sys.executable, str(tmp_path/'hive'), 'mcp'])
     talk = subprocess.Popen(['sh', '-c', 'sleep 120', 'grep', '-m', 'hive', 'mcp'])
     try:
-        time.sleep(.3)
-        rows = {p: (pp, new) for p, pp, new in live.servers()}
+        for _ in range(30):
+            if fake.pid in (rows := {p: (pp, new) for p, pp, new in live.servers()}): break
+            time.sleep(.1)
         assert rows[fake.pid] == (os.getpid(), False) and talk.pid not in rows, 'only Python running Hive counts as a server'
         (u := live.home()/'upgrade').mkdir(parents=True)
         (u/str(os.getpid())).touch()

@@ -142,7 +142,7 @@ async def serve(srv, who=None):
 
 def servers():
     # stdio Hive MCP servers on this machine: (pid, harness pid, in place), where in place means the server upgrades itself
-    try: out = subprocess.run(['ps', '-Ao', 'pid=,ppid=,args='], capture_output=True, text=True, timeout=10).stdout
+    try: out = subprocess.run(['ps', '-Awwo', 'pid=,ppid=,args='], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError): return []
     rows, me = [], os.getpid()
     for ln in out.splitlines():

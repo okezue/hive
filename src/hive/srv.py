@@ -5,12 +5,13 @@ from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import Field
+from pydantic import Field, ValidationError, validate_call
 
-from .err import Anon, Denied, Err, Missing
+from .err import Anon, Bad, Denied, Err, Missing
+from .live import news
 from .reg import host, mine, reg
 from .sess import Sess
-from .util import GROUPS
+from .util import GROUPS, line
 
 INFO = ('Hive connects you with the other agents in this session. Start with join (or me if your identity is preset) to learn your '
         'role, token, and who else is here. Responses may carry interrupts (handle first, then ack), messages, a queued count, and '
@@ -78,10 +79,10 @@ DOCS = {
              "start subagents). 'host' and 'runner' choose explicitly; runner helpers run in your session's harness unless harness says "
              "otherwise, and Hive starts a runner if none is running. 'none' only registers the helper.",
     'host': "Run this hive inside your own harness session: Hive hands you hive agents (helpers that subagents spawned, tasks handed over, and "
-            "ready planned tasks) to start as your own subagents, at most cap at once and only while memory allows, and no runner processes start "
-            "meanwhile. Start each in the background with the description and prompt given, and call host again as subagents finish. Hooks tie "
-            "each subagent to its hive identity, deliver its interrupts, and restart it with a brief if it stops before finishing. Top-level "
-            "sessions only; stop=true stops hosting.",
+            "ready planned tasks) to start as your own subagents, as many as memory and your harness allow (or at most cap), and no runner "
+            "processes start meanwhile. Start each in the background with the description and prompt given, and call host again as subagents "
+            "finish, naming them in ended. Hooks tie each subagent to its hive identity, deliver its interrupts, and restart it with a brief if it "
+            "stops before finishing. Top-level sessions only; stop=true stops hosting.",
     'gather': 'Wait for your children (or the listed agents or tasks) to settle and collect their results; any returns at the first.',
     'tree': 'Show the agent tree around one node (default: your cursor, else you) to a depth, with +N more for wide levels.',
     'node': 'One node in full: goal, task, budget, keeper, children, an exact rollup of its subtree, and which descendant needs attention.',
@@ -119,7 +120,8 @@ DOCS = {
              'as JSON on stdin.',
     'tools': 'Tools shared in the hive (by agents, as commands, or from mounted MCP servers) with owners and schemas, and the mounted servers. '
              'query filters by words in the name or description.',
-    'call': 'Call a shared tool, including the tools of mounted MCP servers (server.tool); waits up to wait seconds, else returns a call id for result.',
+    'call': "Call a shared tool, including the tools of mounted MCP servers (server.tool), or any of Hive's own tools as hive.<tool> (for tools your "
+            'tool list lacks); waits up to wait seconds, else returns a call id for result.',
     'mount': 'Mount an MCP server (a command, or a url for HTTP servers) so every agent in the hive can call its tools as name.tool, whatever '
              'harness they run in. Mounting again refreshes its tools.',
     'unmount': 'Remove a mounted MCP server and its tools.',
@@ -210,7 +212,9 @@ ARGS = {
     'mount.env': 'Environment for the server; ${VAR} is read from each caller at connection time, so secrets stay out of the hive',
     'mount.timeout': 'Seconds a call may take',
     'chain': 'Run the tasks in order, each after the previous',
-    'host.cap': 'Most hive agents running as your subagents at once (default [host] max, 4)',
+    'host.cap': 'Most hive agents running as your subagents at once (default [host] max; 0: as many as memory and your harness allow)',
+    'host.ended': 'Hive names of your subagents that finished or stopped since your last host call; Hive restarts those that stopped before '
+                  'finishing their task',
     'host.stop': 'Stop hosting; queued agents wait',
     'host.tasks': 'Also start agents for ready planned tasks nobody has taken (default true); false starts only spawned helpers and handed tasks',
     'where': "home (your circle, default), parent, a circle name, or choir (the whole egregore; needs member rank)",
@@ -322,8 +326,44 @@ def render(res, note=None):
     return text + f"\n----- {res['path']} v{res['version']} (lines {res.get('start', 1)}-{res.get('end', res.get('lines'))}) -----\n{raw}"
 
 
-def wrap(name, who):
-    ps = list(inspect.signature(getattr(Sess, name), eval_str=True).parameters.values())[1:]
+def params(name): return list(inspect.signature(getattr(Sess, name), eval_str=True).parameters.values())[1:]
+
+
+def own(x, n, names):
+    # call reaches Hive's own tools too, so sessions whose tool list predates a tool can still use it; shared tools keep their names
+    b = n.removeprefix('hive.') if isinstance(n, str) else ''
+    if b not in names or b == 'call' or n == b and x.hive.db.one('SELECT 1 FROM tools WHERE name=?', (n,)): return None
+    return b
+
+
+def invoke(x, n, args):
+    if not isinstance(args, dict): raise Bad('args is an object of named arguments')
+    try: return validate_call(getattr(x, n))(**args)
+    except ValidationError as e:
+        bad = '; '.join(f"{'.'.join(map(str, r['loc'])) or 'args'}: {r['msg']}" for r in e.errors()[:3])
+        raise Bad(f'arguments do not match hive.{n}: {bad}', f"tools(query='hive.{n}') shows its arguments") from None
+
+
+def usage(n):
+    out = {}
+    for p in params(n):
+        t = str(p.annotation).replace('typing.', '').replace("<class '", '').replace("'>", '')
+        out[p.name] = t + ('' if p.default is inspect.Parameter.empty else f' = {p.default!r}') + \
+            (f': {d}' if (d := ARGS.get(f'{n}.{p.name}', ARGS.get(p.name))) else '')
+    return out
+
+
+def catalog(q, names):
+    q = (q or '').strip().lower()
+    if not q: return None
+    if q in ('hive', 'hive.'): return [{'name': f'hive.{n}', 'about': line(DOCS[n], 110)} for n in sorted(names)]
+    b = q.removeprefix('hive.')
+    hit = [n for n in sorted(names) if n == b] or [n for n in sorted(names) if b in n or b in DOCS[n].lower()][:8]
+    return [{'name': f'hive.{n}', 'about': DOCS[n], 'args': usage(n)} for n in hit]
+
+
+def wrap(name, who, names=frozenset()):
+    ps = params(name)
     ps = [p.replace(annotation=Annotated[p.annotation, Field(description=d)]) if (d := ARGS.get(f'{name}.{p.name}', ARGS.get(p.name))) else p
           for p in ps]
     ps.append(inspect.Parameter('agent', inspect.Parameter.KEYWORD_ONLY, default=None,
@@ -332,7 +372,10 @@ def wrap(name, who):
     def tool(**kw):
         try: x = who(kw.pop('agent', None))
         except Err as e: raise ToolError(str(e)) from None
-        try: res = getattr(x, name)(**kw)
+        try:
+            if name == 'call' and (b := own(x, kw.get('name'), names)): res = invoke(x, b, kw.get('args') or {})
+            else: res = getattr(x, name)(**kw)
+            if name == 'tools' and (c := catalog(kw.get('query'), names)): res = res | {'hive': c, 'hiveHint': "call(name='hive.<tool>', args={...}) runs one"}
         except sqlite3.Error as e:
             raise ToolError(f'storage error: {e}' + ('; the store is busy with other agents, so call again in a few seconds' if 'locked' in str(e) or 'busy' in str(e) else '')) from None
         except Err as e:
@@ -340,7 +383,9 @@ def wrap(name, who):
             raise ToolError(str(e) + (f'\n\n{render({}, n)}' if n else '')) from None
         if name == 'leave':
             with suppress(Exception): reg().unbind(token=x.token)
-        return render(res, x.notices())
+        n = x.notices()
+        if t := news(x.id, names): n = (n or {}) | {'hiveUpdated': t}
+        return render(res, n)
 
     tool.__name__, tool.__doc__, tool.__signature__ = name, DOCS[name], inspect.Signature(ps, return_annotation=str)
     return tool
@@ -364,8 +409,9 @@ def build(hive, groups=tuple(GROUPS), who=None, strict=False, claims=False):
         return render(x.welcome())
 
     srv.tool(description=DOCS['join'], structured_output=False)(join)
+    names = frozenset(n for g in groups for n in GROUPS[g].split())
     for g in groups:
-        for n in GROUPS[g].split(): srv.tool(name=n, description=DOCS[n], structured_output=False)(wrap(n, who))
+        for n in GROUPS[g].split(): srv.tool(name=n, description=DOCS[n], structured_output=False)(wrap(n, who, names))
     return srv
 
 

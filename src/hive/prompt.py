@@ -1,3 +1,4 @@
+from .cfg import NOLIMIT
 from .util import an, dumps
 
 PROTOCOL = '''How to work in the hive (MCP server "hive"):
@@ -62,7 +63,7 @@ def lineage(b, chain, t, budget, room, grants=None, tips=None, sub=False):
     parts += ['Your capabilities are narrowed to: ' + ', '.join(grants)] if grants else []
     parts += [tipText(tips)] if tips else []
     parts += [SUB] if sub else []
-    parts.append(f"You may spawn helpers below you (budget {budget}, {room} more level(s)); gather collects their results, and you cannot finish "
+    parts.append(f"You may spawn helpers below you ({'no budget limit' if budget >= NOLIMIT else f'budget {budget}'}, {room} more level(s)); gather collects their results, and you cannot finish "
                  f"t{t.id} while they are unsettled. If you are blocked, escalate to your keeper instead of guessing.")
     parts.append(f"Start with take('t{t.id}'). Finish with done('t{t.id}', result=...) covering what the delivery asks for; if you cannot, "
                  f"fail('t{t.id}', reason=...).")

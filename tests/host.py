@@ -124,7 +124,7 @@ def testHostingIsExclusiveReleasableAndHoldsBackOnLowMemory(hive, team, monkeypa
     r = co.host()
     assert r['start'] == [] and 'free memory is 5%' in r['held']
     assert co.host(stop=True)['hosting'] is False and hive.host.live() is None and hive.autorun() == 'off'
-    assert al.host()['hosting']['max'] == 4
+    assert al.host()['hosting']['max'] == 'no limit'
 
 
 def testInstallAddsSubagentHooksAndDoctorSeesGaps(root):
@@ -141,7 +141,7 @@ def testInstallAddsSubagentHooksAndDoctorSeesGaps(root):
 
 def testGateSkipsTopLevelHiveCallsButNotSubagentsOrEdits(tmp_path):
     got, g = tmp_path/'got', tmp_path/'gate'
-    g.write_text(GATE % {'marks': str(tmp_path/'bound'), 'hosting': str(tmp_path/'hosting'), 'run': f"sh -c 'cat >> {got}; echo \\| >> {got}' --"})
+    g.write_text(GATE % {'marks': str(tmp_path/'bound'), 'hosting': str(tmp_path/'hosting'), 'up': str(tmp_path/'upgrade'), 'run': f"sh -c 'cat >> {got}; echo \\| >> {got}' --"})
     g.chmod(0o755)
 
     def run(ev, d):

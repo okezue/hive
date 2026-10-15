@@ -11,6 +11,8 @@ from .reg import alive, reg, same, stamp
 from .tasks import SETTLED
 from .util import J, clip, dumps, now, sha
 
+INF = float('inf')
+
 try: import fcntl
 except ImportError: fcntl = None
 
@@ -63,10 +65,11 @@ class Adopt:
 
 
 class Runner:
-    def __init__(s, hive, cmds, cap=3, poll=1., op=None, say=None, env=None, watch=False, budget=4, handed=False, linger=0., **pol):
+    def __init__(s, hive, cmds, cap=0, poll=1., op=None, say=None, env=None, watch=False, budget=4, handed=False, linger=0., **pol):
         if bad := set(pol)-set(POL): raise TypeError(f"unknown runner settings: {', '.join(sorted(bad))}")
-        s.hive, s.cap, s.poll, s.env, s.watch, s.budget, s.hn, s.ok, s.warned = hive, max(1, cap), poll, env or {}, watch, budget, {}, set(), set()
-        s.handed, s.linger = handed, linger
+        s.hive, s.cap, s.poll, s.env, s.watch, s.budget, s.hn, s.ok, s.warned = hive, cap if cap > 0 else INF, poll, env or {}, watch, budget, {}, set(), set()
+        s.handed, s.linger, s.warm, s.held = handed, linger, [], None
+        s.free, s.per = float(hive.cfg.runner.get('free', 20)), float(hive.cfg.runner.get('per', 800))
         s.picked = not cmds
         if not cmds and (f := found(hive.cfg)):
             cmds = {'default': f[0]}
@@ -80,7 +83,7 @@ class Runner:
             k = label(cm)
             s.keys[tuple(cm)] = k if got.setdefault(k, cm) == cm else f'{k} #{sha(dumps(cm))[:6]}'
         s.op, s.say, s.jobs, s.beaten, s.idle, s.reset, s.lock, s.hb = op or hive.op('runner'), say or (lambda t: None), {}, 0, set(), 0., None, None
-        s.gs = {k: {**GATE, **g, 'cap': min(float(s.cap), g.get('cap', s.cap))} for k, g in hive.faults.gates().items()}
+        s.gs = {k: {**GATE, **g, 'cap': min(float(s.cap), g.get('cap', s.cap)) if g.get('strikes') else float(s.cap)} for k, g in hive.faults.gates().items()}
         db = hive.cfg.db.resolve()
         s.dir = hive.cfg.dir/('run' if db == (hive.cfg.dir/'hive.db').resolve() else f'run-{db.stem}-{sha(str(db))[:6]}')
         s.dir.mkdir(parents=True, exist_ok=True)
@@ -90,7 +93,7 @@ class Runner:
         r = hive.cfg.runner
         cmds = {k: (v.get('harness') or list(v['command']), *v.get('fallback', [])) for k, v in r.get('roles', {}).items() if v.get('command') or v.get('harness')}
         kw.setdefault('budget', int(r.get('budget', 4)))
-        return cls(hive, kw.pop('cmds', None) or cmds, int(kw.pop('cap', None) or r.get('max', 3)), float(kw.pop('poll', r.get('poll', 1.))), **kw)
+        return cls(hive, kw.pop('cmds', None) or cmds, int(kw.pop('cap', None) or r.get('max', 0)), float(kw.pop('poll', r.get('poll', 1.))), **kw)
 
     def entry(s, x):
         if not isinstance(x, str): return list(x)
@@ -139,7 +142,15 @@ class Runner:
 
     def full(s):
         # agents blocked in gather or wait hold a process but not a slot, so parents waiting on children cannot starve them
-        return len([j for j in s.jobs if j not in s.idle]) >= s.cap or len(s.jobs) >= s.cap*(s.hive.cfg.depth+2)
+        if len([j for j in s.jobs if j not in s.idle]) >= s.cap or len(s.jobs) >= s.cap*(s.hive.cfg.depth+2): return True
+        # agents started in the last minute are still growing, so their expected memory counts against what is free
+        from .build import fits, free
+        s.warm = [t for t in s.warm if now()-t < 60]
+        if fits(s.free, s.per, len(s.warm)): s.held = None
+        elif s.held is None:
+            s.held = now()
+            s.say(f'holding new agents: free memory is {free():.0f}%, and Hive keeps {s.free:.0f}% free')
+        return s.held is not None
 
     def busy(s, k): return sum(j.key == k and j.aid not in s.idle for j in s.jobs.values())
 
@@ -160,7 +171,7 @@ class Runner:
             if s.spent(n, k) or g['paused'] and g['hard']: continue
             if g['paused'] and (g['probe'] > t0 or s.busy(k)): eta.append(max(g['probe'], t0+s.poll))
             elif not g['paused'] and g['until'] > t0: eta.append(g['until'])
-            elif not g['paused'] and s.busy(k) >= max(1, int(g['cap'])): eta.append(t0+s.poll)
+            elif not g['paused'] and s.busy(k) >= max(1, g['cap'] if g['cap'] == INF else int(g['cap'])): eta.append(t0+s.poll)
             else: return 'go', cmd, k
         return ('wait', None, min(eta)) if eta else ('stop', None, None)
 
@@ -240,6 +251,7 @@ class Runner:
             s.settle(Job(n, a.id, t.id, None, log, None, now(), k, 'setup', f'could not start {argv[0]}: {e}'), None)
             raise Err(f'could not start {argv[0]}: {e}') from None
         at = stamp(p.pid)
+        s.warm.append(t0)
         with h.db.tx() as c:
             if a.launch and not b: c.execute('UPDATE tasks SET tries=tries+1 WHERE id=?', (t.id,))
             h.agents.set(c, a.id, state='active', pid=p.pid, pidAt=at, **({'harness': hn} if hn else {}))
@@ -322,7 +334,8 @@ class Runner:
         if k in ENV:
             g.update(strikes=g['strikes']+1, since=g['since'] or t0, last=k, why=why, at=t0)
             g['until'] = max(g['until'], t0+(wait or backoff(g['strikes']-1, lo, hi)))
-            if k == 'rate': g['cap'] = max(1., g['cap']/2)
+            # halving no cap would change nothing, so a command without one halves the agents it runs
+            if k == 'rate': g['cap'] = max(1., (g['cap'] if g['cap'] < INF else s.busy(j.key)+1)/2)
             if not g['paused'] and t0-g['since'] > s.pol['patience']:
                 g.update(paused=why, hard=False)
                 s.issue(c, t, f"{SAY[k]} for {dur(t0-g['since'])}: {why}. Its tasks stay queued and Hive tries it again every {dur(s.pol['probe'])}. "

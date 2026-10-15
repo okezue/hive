@@ -2,7 +2,7 @@ import json, os, re, sys
 from contextlib import suppress
 
 from .err import Anon, Err, Missing
-from .reg import mine, reg
+from .reg import home, mine, reg
 from .util import EVENTS, clip, line
 
 READS = {'read', 'read_file', 'view', 'notebookread', 'open_file'}
@@ -164,9 +164,19 @@ def handle(kind, raw, hive, x, fmt='claude'):
     return None
 
 
+UPGRADED = ("Hive was updated, so its MCP server in this session restarted on the new version. Your next Hive tool call may fail once with "
+            "'Transport closed' while the harness reconnects; if it does, make the same call again. Your tool list still shows the Hive tools it "
+            "had when the session started: call newer ones through call(name='hive.<tool>', args={...}), and tools(query='hive') lists them all.")
+
+
 def main(kind, fmt='claude', hive=None):
     try:
         raw, b = sys.stdin.read(), None
+        if kind == 'post' and (home()/'upgrade'/str(os.getppid())).exists():
+            from .live import restart
+            if restart(os.getppid()):
+                print(emit(fmt, kind, UPGRADED))
+                return 0
         if not hive:
             env = os.environ.get('HIVE_AGENT_TOKEN') or os.environ.get('HIVE_AGENT')
             if not env and not (b := mine()): return 0

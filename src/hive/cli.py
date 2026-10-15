@@ -55,8 +55,12 @@ def serve(a):
         return build(opened(a, True), groups(a.tools), strict=True).run('streamable-http', host=a.host, port=a.port)
     for k, v in (('HIVE_AGENT_TOKEN', a.token), ('HIVE_AGENT', a.agent), ('HIVE_ROLE', a.role), ('HIVE_WORKFLOW', a.workflow)):
         if v: os.environ[k] = v
+    import anyio
+    from .live import serve as live
+    from .srv import Who
     db, root = pick(a.hive) if a.hive else (a.db, a.root)
-    build(Lazy(lambda: Hive.find(db, root, a.session, a.dir)), groups(a.tools), claims=True).run('stdio')
+    h = Lazy(lambda: Hive.find(db, root, a.session, a.dir))
+    anyio.run(live, build(h, groups(a.tools), who := Who(h), claims=True), who)
 
 
 def config(a):
@@ -221,12 +225,35 @@ def report(d):
     return d['ok']
 
 
+def upgrade(a):
+    from .harness import gate
+    from .live import restart, servers, tidy
+    from .reg import home
+    tidy()
+    rows = servers()
+    n, old = sum(not new for *_, new in rows), sorted({pp for _, pp, new in rows if not new})
+    print(f'{len(rows)} Hive MCP server(s) running: {len(rows)-n} update themselves in place, {n} in {len(old)} session(s) predate that')
+    if not old or a.dry_run: return 0
+    if a.now:
+        print(f'restarted {sum(restart(pp) for pp in old)} of them; their harnesses reconnect them on the new version')
+        return 0
+    gate()
+    (u := home()/'upgrade').mkdir(parents=True, exist_ok=True)
+    for pp in old: (u/str(pp)).touch()
+    print("each restarts on the new version at its session's next tool call, and that session is told its next Hive call may need a "
+          "retry (sessions with Hive's hooks); hive upgrade --now restarts them right away")
+    return 0
+
+
 def doctor(a):
     from .harness import ORDER, doctor as check, found, installed
     root = project(a)
     ns = a.harness or [n for n in ORDER if installed(n, root)] or found()
     if not ns: raise Missing('no agent CLI found on PATH and Hive is installed in none', 'hive install <harness>')
-    return 0 if all([report(check(n, root, not a.quick)) for n in ns]) else 1
+    ok = all([report(check(n, root, not a.quick)) for n in ns])
+    from .live import servers
+    if n := sum(not new for *_, new in servers()): print(f'{n} running Hive server(s) predate in-place upgrades: hive upgrade moves them to this version')
+    return 0 if ok else 1
 
 
 def start(a):
@@ -389,6 +416,8 @@ def parser():
         opt('--no-check', action='store_true'))
     cmd(uninstall, opt('harness', nargs='+'), opt('--project', action='store_true'), opt('--dry-run', action='store_true'))
     cmd(doctor, hs, opt('--quick', action='store_true', help="skip asking the harness's own mcp list"))
+    cmd(upgrade, opt('--now', action='store_true', help='restart old servers right away instead of at their next tool call'),
+        opt('--dry-run', action='store_true'))
     cmd(start, opt('harness'), opt('prompt', nargs='*'), opt('--name'), opt('--role', default='implementer'), opt('--task'), opt('--workflow'),
         opt('-p', '--print', action='store_true', help='run headless and print the output'), opt('--model'))
     cmd(mount, opt('names', nargs='*'), opt('--from', dest='frm'), opt('--url'), opt('--env', action='append'), opt('--header', action='append'),

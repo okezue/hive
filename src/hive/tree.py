@@ -1,5 +1,6 @@
 import math
 
+from .cfg import NOLIMIT
 from .build import ready
 from .err import Bad, Clash, Denied, Missing
 from .log import fmt
@@ -56,10 +57,11 @@ class Tree:
         with s.db.tx() as c:
             a = c.execute('SELECT * FROM agents WHERE id=?', (a.id,)).fetchone()
             if (n := c.execute("SELECT COUNT(*) n FROM agents k LEFT JOIN tasks t ON t.id=k.deleg WHERE k.parent=? AND k.state!='left' "
-                               "AND (t.id IS NULL OR t.state NOT IN ('done','failed','cancelled','blocked'))", (a.id,)).fetchone().n) >= cfg.fanout:
+                               "AND (t.id IS NULL OR t.state NOT IN ('done','failed','cancelled','blocked'))", (a.id,)).fetchone().n) >= cfg.fanout > 0:
                 raise Clash(f'{a.name} already has {n} live children (limit {cfg.fanout})', 'gather or cancel some first')
-            b = max(0, (a.budget-1)//2) if budget is None else int(budget)
-            if b < 0 or a.budget < b+1:
+            big = a.budget >= NOLIMIT
+            b = (a.budget if big else max(0, (a.budget-1)//2)) if budget is None else int(budget)
+            if b < 0 or not big and a.budget < b+1:
                 raise Clash(f'{a.name} has budget {a.budget}; a child costs 1 plus the budget it receives ({b})',
                             'ask for less, gather children to recover their unspent budget, or escalate with fund')
             taken = set(s.agents.names().values())
@@ -68,7 +70,7 @@ class Tree:
             if name and name in taken: raise Clash(f'{name} is taken')
             kid = s.agents.join(n, role, s.agents.wfNames().get(a.wf), a.id, goal[:200])
             t = s.tasks.delegate(c, a, kid, goal, deliver, role, paths, verify, harness or (inh and '~'+inh))
-            c.execute("UPDATE agents SET budget=budget-? WHERE id=?", (b+1, a.id))
+            if not big: c.execute("UPDATE agents SET budget=budget-? WHERE id=?", (b+1, a.id))
             c.execute("UPDATE agents SET budget=?,goal=?,deleg=?,launch=?,grants=?,state=?,task=NULL,handed=? WHERE id=?",
                       (b, goal, t, launch, None if caps == want else dumps(sorted(caps)), 'pending', None if q or launch != 'host' else now(), kid.id))
             if q: s.mail.put(c, a, [m['agent']], f'{a.name} spawned {n}: call host() to start it as your subagent.', 'steer', 'host', log=False)

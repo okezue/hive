@@ -1,9 +1,9 @@
 import re
 
-from .err import Clash, Denied
+from .err import Clash, Denied, Missing
 from .util import J, ago, dumps, line, now
 
-DEF = {'max': 4, 'free': 20, 'start': 600, 'restarts': 3, 'lease': 3600}
+DEF = {'max': 0, 'free': 20, 'per': 150, 'start': 600, 'restarts': 3, 'lease': 3600}
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS runs(key TEXT PRIMARY KEY,agent INTEGER,host INTEGER,state TEXT DEFAULT 'running',since REAL,ended REAL,why TEXT DEFAULT '');
 CREATE INDEX IF NOT EXISTS runAgent ON runs(agent,state)'''
@@ -11,8 +11,14 @@ TOKEN, DESC = re.compile(r'Your Hive token is "([^"]+)"'), re.compile(r'^hive (\
 DONE = ('done', 'failed', 'cancelled', 'blocked')
 HOSTED = "(a.launch='host' OR (a.launch IS NULL AND a.deleg IS NOT NULL AND a.pid IS NULL))"
 HOW = ('Start each one now as your own subagent, in the background, with the description and prompt exactly as given (Grok: spawn_subagent; '
-       'Claude Code: the Agent tool), and leave their work to them. Call host again whenever a subagent finishes or Hive says hive agents are '
-       'waiting: it hands out at most {max} at once and holds back while memory is low. Follow the work with tree, overview and gather.')
+       'Claude Code: the Agent tool), and leave their work to them. Call host again whenever a subagent finishes (pass the hive names of the '
+       'subagents that finished as ended) or Hive says hive agents are waiting: it hands out {lim} and holds back while memory is low. Follow the '
+       'work with tree, overview and gather.')
+
+
+def lim(m):
+    caps = [x for x in (m['max'], m.get('limit')) if x]
+    return f'at most {min(caps)} at once' if caps else 'as many as memory allows'
 
 
 def args(inp):
@@ -50,10 +56,12 @@ class Host:
             m = s.live(c)
             if m and m['agent'] != a.id:
                 raise Clash(f"{s.h.agents.get(m['agent']).name} already hosts this hive", 'ask it to release hosting, or wait until its session ends')
-            new = {'agent': a.id, 'max': max(1, min(int(cap or (m or {}).get('max') or s.cfg['max']), 32)), 'since': (m or {}).get('since') or now(),
-                   'pid': p, 'at': p and stamp(p), 'harness': n or a.harness or ''}
+            from .harness import subagents
+            h = n or a.harness or ''
+            new = {'agent': a.id, 'max': max(0, int(cap if cap is not None else (m or {}).get('max', s.cfg['max']))), 'since': (m or {}).get('since') or now(),
+                   'pid': p, 'at': p and stamp(p), 'harness': h, 'limit': subagents(h, s.h.root)}
             c.execute('INSERT OR REPLACE INTO meta VALUES(?,?)', ('host', dumps(new)))
-            if not m: s.h.log.add(c, a.id, 'host.started', f"{a.name} hosts the hive in {new['harness'] or 'its harness'} (up to {new['max']} at once)", f'agent:{a.name}')
+            if not m: s.h.log.add(c, a.id, 'host.started', f"{a.name} hosts the hive in {new['harness'] or 'its harness'} ({lim(new)})", f'agent:{a.name}')
         return new
 
     def release(s, a):
@@ -77,9 +85,13 @@ class Host:
         return c.execute("SELECT * FROM tasks WHERE state='ready' AND owner IS NULL" + ('' if every else ' AND run=1') + ' ORDER BY run DESC,prio DESC,id').fetchall()
 
     def room(s, c, m):
-        from .build import free
-        if (f := free()) < s.cfg['free']: return 0, f"free memory is {f:.0f}%, below the {s.cfg['free']}% Hive keeps; it hands out more once memory frees up"
-        return max(0, m['max']-len(s.running(c))), None
+        from .build import fits, free
+        run = s.running(c)
+        # agents handed out in the last minute are still growing, so their expected memory counts against what is free
+        if not (n := fits(s.cfg['free'], s.cfg['per'], sum(now()-r.handed < 60 for r in run))):
+            return 0, f"free memory is {free():.0f}%; Hive keeps {s.cfg['free']}% free and hands out more once memory frees up"
+        caps = [x for x in (m['max'], m.get('limit')) if x]
+        return max(0, min(n, min(caps)-len(run)) if caps else n), None
 
     def reap(s, c):
         for a in c.execute(f"SELECT a.* FROM agents a WHERE {HOSTED} AND a.handed<? AND a.state='pending' AND a.calls=0", (now()-s.cfg['start'],)).fetchall():
@@ -92,9 +104,10 @@ class Host:
         p, b = x.promptFor(x, k.deleg, True), s.h.faults.brief(s.h.tasks.get(k.deleg), k.id)
         return f'{p}\n\n{b}' if b else p
 
-    def call(s, a, cap=None, stop=False, tasks=True):
+    def call(s, a, cap=None, stop=False, tasks=True, ended=None):
         if stop: return s.release(a)
         m = s.take(a, cap)
+        for x in ended or []: s.ended(x)
         with s.db.tx() as c:
             s.reap(c)
             n, why = s.room(c, m)
@@ -111,11 +124,11 @@ class Host:
         start = [{'agent': k.name, 'role': k.role, 'description': f'hive {k.name}', 'prompt': s.prompt(k)} for k in picks]
         with s.db.tx() as c:
             run, wait = s.running(c), len(s.queued(c)) + len(s.ready(c, tasks))
-        out = {'hosting': {'max': m['max'], 'running': len(run), 'waiting': wait}, 'start': start,
+        out = {'hosting': {'max': m['max'] or 'no limit', 'running': len(run), 'waiting': wait}, 'start': start,
                'running': [{'agent': r.name, 'task': f't{r.deleg}', 'state': r.state, 'last': ago(r.seen) if r.calls else 'not started'} |
                            ({'status': line(r.status, 100)} if r.status else {}) for r in run]}
         if why: out['held'] = why
-        out['hint'] = HOW.format(max=m['max']) if start else ('nothing to start now; ' + ('call host again when a subagent finishes' if run or wait else
+        out['hint'] = HOW.format(lim=lim(m)) if start else ('nothing to start now; ' + ('call host again when a subagent finishes' if run or wait else
                                                                                           'every hive agent is done. Plan more work, or host(stop=true) to stop hosting'))
         return out
 
@@ -166,18 +179,26 @@ class Host:
         s.end(s.key(raw), a, open, raw.get('lastAssistantMessage') or raw.get('last_assistant_message') or '')
         return None
 
+    def ended(s, name):
+        try: a = s.h.agents.named(str(name).removeprefix('hive ').strip())
+        except Missing: return
+        if not s.h.agents.hosted(a) or a.state == 'left' or a.handed is None or a.state == 'pending': return
+        t = a.deleg and s.h.tasks.get(a.deleg)
+        r = s.db.one("SELECT key FROM runs WHERE agent=? AND state='running'", (a.id,))
+        s.end(r.key if r else None, a, bool(t) and t.state not in DONE)
+
     def end(s, k, a, open, said=''):
         from .sess import Sess
         with s.db.tx() as c:
-            r = c.execute("SELECT * FROM runs WHERE key=? AND state='running'", (k,)).fetchone()
-            if not r: return
-            c.execute("UPDATE runs SET state='ended',ended=?,why=? WHERE key=?", (now(), 'stopped before finishing' if open else 'finished', k))
+            r = c.execute("SELECT * FROM runs WHERE key=? AND state='running'", (k,)).fetchone() if k else None
+            if k and not r: return
+            if r: c.execute("UPDATE runs SET state='ended',ended=?,why=? WHERE key=?", (now(), 'stopped before finishing' if open else 'finished', k))
             a = c.execute('SELECT * FROM agents WHERE id=?', (a.id,)).fetchone()
             if not open or a.state == 'left':
                 if a.state != 'left': Sess(s.h, a.id).leave('its subagent finished')
                 return
             t = s.h.tasks.get(a.deleg, c)
-            s.h.faults.add(c, t.id, a.id, 'host', 'quit', 'its subagent stopped before finishing', said, made=s.h.faults.made(c, a.id, r.since))
+            s.h.faults.add(c, t.id, a.id, 'host', 'quit', 'its subagent stopped before finishing', said, made=s.h.faults.made(c, a.id, r.since if r else a.handed))
             n = c.execute("SELECT COUNT(*) n FROM faults WHERE task=? AND cmd='host'", (t.id,)).fetchone().n
             m = s.get(c)
             if n > s.cfg['restarts']:
@@ -194,6 +215,6 @@ class Host:
         with s.db.tx() as c:
             m, run, q = s.live(c), s.running(c), s.queued(c)
             rs = c.execute('SELECT r.*,a.name FROM runs r JOIN agents a ON a.id=r.agent ORDER BY r.since DESC LIMIT 20').fetchall()
-        return {'host': m and {'agent': s.h.agents.get(m['agent']).name, 'max': m['max'], 'harness': m['harness'], 'since': ago(m['since'])},
+        return {'host': m and {'agent': s.h.agents.get(m['agent']).name, 'max': m['max'] or 'no limit', 'harness': m['harness'], 'since': ago(m['since'])},
                 'running': [r.name for r in run], 'queued': [r.name for r in q],
                 'subagents': [{'agent': r.name, 'subagent': r.key, 'state': r.state, 'since': ago(r.since)} | ({'why': r.why} if r.why else {}) for r in rs]}

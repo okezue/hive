@@ -61,7 +61,7 @@ def extra(): return {'HIVE_HOME': str(Path(h).expanduser().resolve())} if (h := 
 
 GATE = '''#!/bin/sh
 # Hive hook gate: start Hive only in sessions that belong to a hive, without starting any other process to find out.
-[ -n "${HIVE_AGENT:-}${HIVE_AGENT_TOKEN:-}" ] || [ -e %(marks)s/$PPID ] ||
+[ -n "${HIVE_AGENT:-}${HIVE_AGENT_TOKEN:-}" ] || [ -e %(marks)s/$PPID ] || [ -e %(up)s/$PPID ] ||
   { [ -r /proc/$PPID/stat ] && read -r _ _ _ p _ < /proc/$PPID/stat && [ -e %(marks)s/$p ]; } || exit 0
 # a Hive tool call needs the hook only inside a subagent of a session that hosts its hive, where Hive passes the subagent's own token
 if [ "$1" = pre ]; then
@@ -77,7 +77,8 @@ exec %(run)s hook "$@"
 def gate(dry=False):
     e, hm = [f'{k}={v}' for k, v in extra().items()], Path(extra().get('HIVE_HOME') or '~/.hive').expanduser()
     p = hm/'hive-hook'
-    text = GATE % {'marks': shlex.quote(str(hm/'bound')), 'hosting': shlex.quote(str(hm/'hosting')), 'run': shlex.join((['env', *e] if e else []) + exe())}
+    text = GATE % {'marks': shlex.quote(str(hm/'bound')), 'hosting': shlex.quote(str(hm/'hosting')), 'up': shlex.quote(str(hm/'upgrade')),
+                   'run': shlex.join((['env', *e] if e else []) + exe())}
     if not dry and (not p.exists() or p.read_text() != text):
         from .reg import reg
         hm.mkdir(parents=True, exist_ok=True)
@@ -342,6 +343,14 @@ def doctor(n, root, native=True):
             if not hit or re.search(r'fail|error|✗|✘|disconnect|disabled|timed? ?out', hit, re.I): ok = False
         except (OSError, subprocess.SubprocessError) as e: out['native'] = f'{n} mcp list failed: {e}'[:300]
     return out | {'ok': ok}
+
+
+def subagents(n, root='.'):
+    # how many subagents the harness runs at once; Grok queues or refuses the rest
+    if n != 'grok': return None
+    for f in (Path(root)/'.grok'/'config.toml', Path('~/.grok/config.toml').expanduser()):
+        if isinstance(v := readT(f).get('subagents', {}).get('max_concurrent'), int) and v > 0: return v
+    return 32
 
 
 def fill(t, vals): return re.sub(r'\{(prompt|promptFile|task|agent|token|role|db|root|mcp)\}', lambda m: vals[m[1]], t)

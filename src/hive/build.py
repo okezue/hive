@@ -248,6 +248,10 @@ def free():
 def total(): return os.sysconf('SC_PAGE_SIZE')*os.sysconf('SC_PHYS_PAGES')/2**20
 
 
+def fits(floor, per, warm=0):
+    return 10**6 if floor <= 0 or per <= 0 else max(0, int(((free()-floor)/100*total() - warm*per)/per))
+
+
 def libc():
     if 'c' not in _lib: _lib['c'] = ctypes.CDLL(ctypes.util.find_library('c'))
     return _lib['c']

@@ -78,7 +78,9 @@ A coordinator can start each agent itself: `dispatch('t3')` returns a new agent'
 ```toml
 # .hive/config.toml
 [runner]
-max = 3
+max = 0          # agents at once (0: no fixed limit; memory decides)
+free = 20        # free memory (%) Hive keeps when starting agents
+per = 800        # memory (MB) counted for each agent still warming up
 
 [runner.roles.default]
 harness = "claude"
@@ -95,11 +97,11 @@ command = ["my-agent", "--prompt", "{prompt}", "--mcp-config", "{mcp}"]   # any 
 hive plan plan.json && hive run
 ```
 
-With a default command or harness (or ones for `composer` and `distiller`), the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, up to `max` at a time, records each process in the registry, passes it `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, and logs its output under `.hive/run/`. When an agent stops without finishing, the runner reads the reason from its exit code and last lines of output (Claude Code's `API Error: 429` or `usage limit reached|<reset time>`, Codex's `exceeded retry limit` or `ran out of room in the model's context window`, Grok's `max turns reached`, Gemini's quota and `max session turns` messages, plus timeouts, hangs, and crashes) and acts on it as described in the README under Failures and recovery: it cools a rate-limited command for as long as the provider asks, switches to a `fallback`, restarts the same agent with a brief of its progress, or, when nothing is left to try, fails the task with a diagnosis you can act on and `hive retry`.
+With a default command or harness (or ones for `composer` and `distiller`), the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, as many as memory allows (or up to `max` at a time), records each process in the registry, passes it `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, and logs its output under `.hive/run/`. When an agent stops without finishing, the runner reads the reason from its exit code and last lines of output (Claude Code's `API Error: 429` or `usage limit reached|<reset time>`, Codex's `exceeded retry limit` or `ran out of room in the model's context window`, Grok's `max turns reached`, Gemini's quota and `max session turns` messages, plus timeouts, hangs, and crashes) and acts on it as described in the README under Failures and recovery: it cools a rate-limited command for as long as the provider asks, switches to a `fallback`, restarts the same agent with a brief of its progress, or, when nothing is left to try, fails the task with a diagnosis you can act on and `hive retry`.
 
 ## Hosting a hive inside a harness
 
-`host` turns a top-level harness session into the launcher for its hive. Each call registers the session as host (one per hive; it stays host while its harness process lives), hands back up to `cap` agents to start (`start`: name, role, description `hive <name>`, and prompt), and lists the ones running. The session starts each with its own subagent tool in the background (Grok's `spawn_subagent`, Claude Code's Agent tool), using the description and prompt as given, then calls `host` again as subagents finish; Hive's notices, and the `Stop` hook while room is free, tell it when agents are waiting.
+`host` turns a top-level harness session into the launcher for its hive. Each call registers the session as host (one per hive; it stays host while its harness process lives), hands back as many agents to start as memory and the harness allow (or up to `cap`) (`start`: name, role, description `hive <name>`, and prompt), and lists the ones running. The session starts each with its own subagent tool in the background (Grok's `spawn_subagent`, Claude Code's Agent tool), using the description and prompt as given, then calls `host` again as subagents finish, naming them in `ended`; Hive's notices, and the `Stop` hook while room is free, tell it when agents are waiting. Memory pacing counts each subagent handed out in the last minute as `[host] per` MB still to come, so a burst of hand-outs cannot overshoot `[host] free`. In Grok, Hive also stays within `[subagents] max_concurrent` from the project or user config (32 when unset).
 
 What `host` hands out, in order: helpers that hosted subagents spawned (deepest first, since their parents wait on them), tasks handed over with `dispatch`, and ready planned tasks nobody has taken (`tasks=false` skips these). An agent handed out but not started within ten minutes goes back in the queue. Hosted agents started for planned tasks get `[runner] budget` to spawn helpers of their own. While a host is live, `hive run` and automatic runners stand back, and `spawn` and `dispatch` never start a separate process (except a `spawn` that names another harness).
 
@@ -109,10 +111,13 @@ Hooks bind each subagent to its hive agent from three sources: the `SubagentStar
 - `PostToolUse` records the subagent's activity under its own name and returns its interrupts, messages, and updates.
 - `SubagentStop` blocks once per turn while the agent's task is unfinished. When the subagent stops anyway (or its session ends), Hive records why, returns the agent to the queue with a brief of earlier attempts, and tells the host; after `[host] restarts` restarts the task fails. When the task is done, the agent leaves.
 
+Sessions that loaded Hive's hooks before `SubagentStart` and `SubagentStop` existed still host: binding falls back to the first prompt and Hive call, and `host(ended=[names])` reports the subagents that finished, which Hive treats as `SubagentStop` does. Their tool list may also lack `host`; `call(name="hive.host", args={...})` reaches it.
+
 ```toml
 # .hive/config.toml
 [host]
-max = 4          # hive agents running as the host's subagents at once
-free = 20        # free memory (%) needed to hand out another
+max = 0          # hive agents running as the host's subagents at once (0: as many as memory and the harness allow)
+free = 20        # free memory (%) Hive keeps when handing agents out
+per = 150        # memory (MB) counted for each subagent still warming up
 restarts = 3     # restarts after a subagent stops before finishing
 ```

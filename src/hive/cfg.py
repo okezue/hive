@@ -16,8 +16,8 @@ chunk = 3000
 
 [tree]
 depth = 4            # how many levels below a root agent may spawn
-fanout = 8           # live children per agent
-budget = 32          # agents a root may create in its whole subtree; spawning hands slices of it down
+fanout = 0           # live children per agent (0: no limit)
+budget = 0           # agents a root may create in its whole subtree, handed down in slices as it spawns (0: no limit)
 
 [insights]
 auto = true          # file compose and distill tasks when there are composers or distillers to take them
@@ -25,7 +25,9 @@ min = 2              # finished subtasks a task needs before its subtree gets co
 global = "~/.hive/insights.db"   # library for insights saved with scope "global"; project ones live in .hive/insights.db
 
 [runner]
-max = 3
+max = 0              # agents running at once (0: no fixed limit; memory decides)
+free = 20            # free memory (%) Hive keeps: it starts no agent that would take memory below this
+per = 800            # memory (MB) to expect for each new agent process while it warms up
 poll = 1.0
 budget = 4           # budget each dispatched agent gets for spawning helpers; it returns when the agent exits
 timeout = 7200       # seconds an agent may run before it is stopped and restarted with a brief of its progress (0: no limit)
@@ -50,8 +52,9 @@ auto = false         # true enrolls every agent in the egregore (circles, board,
 # term = 14400       # seconds an elected office lasts
 
 [host]
-max = 4              # hive agents a hosting harness session runs at once as its own subagents (see the host tool)
-free = 20            # free memory (%) needed to hand out another one
+max = 0              # hive agents a hosting harness session runs at once as its own subagents (0: as many as memory and the harness allow)
+free = 20            # free memory (%) Hive keeps: it hands out no agent that would take memory below this
+per = 150            # memory (MB) to expect for each new subagent while it warms up
 restarts = 3         # times a hosted agent is restarted after its subagent stops before finishing
 
 # Your own harness, usable wherever a harness name goes: run is the headless command, chat the interactive one
@@ -59,6 +62,8 @@ restarts = 3         # times a hosted agent is restarted after its subagent stop
 # run = ["mine", "-p", "{prompt}"]
 # chat = ["mine", "{prompt}"]
 '''
+
+NOLIMIT = 10**9
 
 
 @dataclass
@@ -71,8 +76,8 @@ class Cfg:
     summ: dict = field(default_factory=dict)
     runner: dict = field(default_factory=dict)
     depth: int = 4
-    fanout: int = 8
-    budget: int = 32
+    fanout: int = 0
+    budget: int = NOLIMIT
     insights: dict = field(default_factory=dict)
     harness: dict = field(default_factory=dict)
     egregore: dict = field(default_factory=dict)
@@ -116,7 +121,7 @@ def load(db=None, root=None, session=None, cwd=None):
     st = tomllib.loads((d/'config.toml').read_text()) if (d/'config.toml').is_file() else {}
     h, t = st.get('hive', {}), st.get('tree', {})
     return Cfg(db, root, int(h.get('reminder', 20)), int(h.get('tries', 2)), float(h.get('stale', 900)),
-               dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 8)), int(t.get('budget', 32)),
+               dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 0)), int(t.get('budget', 0)) or NOLIMIT,
                dict(st.get('insights', {})), dict(st.get('harness', {})), dict(st.get('egregore', {})), dict(st.get('host', {})))
 
 

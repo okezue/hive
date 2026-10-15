@@ -362,7 +362,8 @@ class Sess:
         if harness: profile(harness, s.hive.cfg, True)
         return s.hive.tree.spawn(s._me(), goal, role, name, budget, launch, grants, deliver, paths, verify, harness)
 
-    def host(s, cap: int | None = None, stop: bool = False, tasks: bool = True): return s.hive.host.call(s._me(), cap, stop, tasks)
+    def host(s, cap: int | None = None, stop: bool = False, tasks: bool = True, ended: list[str] | None = None):
+        return s.hive.host.call(s._me(), cap, stop, tasks, ended)
 
     def gather(s, of: list[str] | str | None = None, secs: float = 60, any: bool = False, budget: int = 2000):
         return s.hive.tree.gather(s._me(), of, secs, any, budget)

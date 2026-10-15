@@ -255,7 +255,7 @@ class Faults:
     def show(s, limit=20):
         h, names, t = s.h, s.h.agents.names(), now()
         gs = [{'command': k, 'state': ('paused' if g.get('hard') else 'probing') if g.get('paused') else 'cooling' if g.get('until', 0) > t else 'ok',
-               'concurrency': round(g.get('cap', 0), 1)} | ({'why': g['why']} if g.get('why') else {}) |
+               'concurrency': 'no limit' if g.get('cap', 0) == float('inf') else round(g.get('cap', 0), 1)} | ({'why': g['why']} if g.get('why') else {}) |
               ({'retryIn': dur(max(g.get('until', 0), g.get('probe', 0) if g.get('paused') else 0)-t)} if max(g.get('until', 0), g.get('probe', 0)) > t else {})
               for k, g in sorted(s.gates().items())]
         fs = [f"t{f.task} {names.get(f.agent, '-')} {SAY.get(f.kind, f.kind) if f.kind != 'retry' else 'retried'}" + (f': {line(f.why, 120)}' if f.why else '') +

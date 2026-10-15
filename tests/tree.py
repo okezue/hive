@@ -6,6 +6,13 @@ from hive.err import Bad, Clash, Denied, Missing
 from hive.run import Runner
 
 
+@pytest.fixture(autouse=True)
+def finite(root):
+    # these tests check budget arithmetic, so they pin the finite budget and fanout the defaults no longer set
+    (root/'.hive').mkdir(exist_ok=True)
+    (root/'.hive'/'config.toml').write_text('[tree]\nbudget = 32\nfanout = 8\n')
+
+
 @pytest.fixture
 def lead(hive):
     c = hive.join('lead', 'coordinator')
@@ -247,7 +254,7 @@ def testOldDatabaseMigrates(root):
 
     from hive import Hive
     db = root/'.hive'/'hive.db'
-    db.parent.mkdir()
+    db.parent.mkdir(exist_ok=True)
     c = sqlite3.connect(db)
     c.execute("CREATE TABLE agents(id INTEGER PRIMARY KEY,name TEXT UNIQUE NOT NULL,role TEXT NOT NULL,token TEXT UNIQUE NOT NULL,wf INTEGER,"
               "parent INTEGER,about TEXT DEFAULT '',state TEXT DEFAULT 'active',status TEXT DEFAULT '',task INTEGER,calls INTEGER DEFAULT 0,joined REAL,seen REAL)")

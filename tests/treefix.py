@@ -6,6 +6,13 @@ from hive.err import Bad, Clash, Denied, Missing
 from hive.run import Runner
 
 
+@pytest.fixture(autouse=True)
+def finite(root):
+    # these tests check budget arithmetic, so they pin the finite budget and fanout the defaults no longer set
+    (root/'.hive').mkdir(exist_ok=True)
+    (root/'.hive'/'config.toml').write_text('[tree]\nbudget = 32\nfanout = 8\n')
+
+
 @pytest.fixture
 def lead(hive):
     c = hive.join('lead', 'coordinator')

@@ -35,8 +35,9 @@ def brief(n, role, charter, tok=None, build=False, ego=False):
 def tipText(tips): return 'Insights saved from earlier work that may apply (weigh them if they help or mislead):\n' + '\n'.join(f'- {x}' for x in tips)
 
 
-SUB = ('You run as a subagent inside another session. You cannot start subagents yourself, so helpers you spawn run as their own processes '
-       'through Hive\'s runner, and Hive reaches you only through your own Hive calls: keep calling progress as you work.')
+SUB = ('You run as a subagent inside another session. You cannot start subagents yourself: helpers you spawn are started for you, as fellow '
+       'subagents by the session that hosts this hive or as their own processes by Hive\'s runner. Hive reaches you only through your own Hive '
+       'calls, so keep calling progress as you work, and finish with done or fail before you stop.')
 
 
 def task(b, t, deps=None, tips=None, sub=False):

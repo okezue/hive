@@ -19,7 +19,9 @@ INFO = ('Hive connects you with the other agents in this session. Start with joi
         'Hive hears from you only when you call it: post progress every few steps and finish tasks with done or fail. '
         'To split work, spawn helpers (or dispatch planned tasks). A top-level session starts them with its own subagent tool, right away. '
         'Subagents cannot start subagents, so a subagent\'s helpers run as their own processes through Hive\'s runner, which Hive starts '
-        'when needed; use launch="runner" yourself for long work, many tasks, or helpers that will need helpers of their own.')
+        'when needed; use launch="runner" yourself for long work, many tasks, or helpers that will need helpers of their own. '
+        'To run a whole hive inside your own session instead, call host: Hive hands you its agents to start as your own subagents, '
+        'including helpers that subagents spawn, and no other processes start.')
 
 DOCS = {
     'join': 'Join the hive. Returns your token, your charter, how to work here, and who else is present.',
@@ -75,6 +77,11 @@ DOCS = {
              "you are a top-level session, and has Hive's runner start the helper as its own process when you are a subagent (subagents cannot "
              "start subagents). 'host' and 'runner' choose explicitly; runner helpers run in your session's harness unless harness says "
              "otherwise, and Hive starts a runner if none is running. 'none' only registers the helper.",
+    'host': "Run this hive inside your own harness session: Hive hands you hive agents (helpers that subagents spawned, tasks handed over, and "
+            "ready planned tasks) to start as your own subagents, at most cap at once and only while memory allows, and no runner processes start "
+            "meanwhile. Start each in the background with the description and prompt given, and call host again as subagents finish. Hooks tie "
+            "each subagent to its hive identity, deliver its interrupts, and restart it with a brief if it stops before finishing. Top-level "
+            "sessions only; stop=true stops hosting.",
     'gather': 'Wait for your children (or the listed agents or tasks) to settle and collect their results; any returns at the first.',
     'tree': 'Show the agent tree around one node (default: your cursor, else you) to a depth, with +N more for wide levels.',
     'node': 'One node in full: goal, task, budget, keeper, children, an exact rollup of its subtree, and which descendant needs attention.',
@@ -203,6 +210,9 @@ ARGS = {
     'mount.env': 'Environment for the server; ${VAR} is read from each caller at connection time, so secrets stay out of the hive',
     'mount.timeout': 'Seconds a call may take',
     'chain': 'Run the tasks in order, each after the previous',
+    'host.cap': 'Most hive agents running as your subagents at once (default [host] max, 4)',
+    'host.stop': 'Stop hosting; queued agents wait',
+    'host.tasks': 'Also start agents for ready planned tasks nobody has taken (default true); false starts only spawned helpers and handed tasks',
     'where': "home (your circle, default), parent, a circle name, or choir (the whole egregore; needs member rank)",
     'circle.of': 'A circle name; default yours',
     'circle.join': 'A circle to move into (you are seated in its least crowded sub-circle)',

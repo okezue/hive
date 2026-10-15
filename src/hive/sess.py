@@ -108,7 +108,8 @@ class Sess:
         out = [f"unacknowledged interrupts {', '.join(f'm{m.id}' for m in u)}: handle them, then ack them"] if (u := h.mail.urgent(a.id)) else []
         out += [f"merge request mr{m.id} on {m.path} waits on you: merges('mr{m.id}')" for m in h.files.mrs.involving(a.id)
                 if a.id in h.files.mrs.waiting(m)]
-        return out + [f"issue i{x.id} waits on your decision: issues()" for x in h.db.q("SELECT id FROM issues WHERE holder=? AND state='open'", (a.id,))]
+        out += [f"issue i{x.id} waits on your decision: issues()" for x in h.db.q("SELECT id FROM issues WHERE holder=? AND state='open'", (a.id,))]
+        return out + ([f'{n} hive agent(s) can start now as your subagents: call host() and start them'] if (n := h.host.waiting(a)) else [])
 
     def overview(s, scope: str = 'auto'): return s.hive.aware.overview(s._me(), scope)
 
@@ -297,11 +298,16 @@ class Sess:
         h.roles.need(a, 'spawn', 'dispatch agents')
         if launch not in ('auto', 'host', 'runner'): raise Bad('launch is auto, host, or runner')
         if launch != 'runner' and not h.agents.hosted(a): return s._dispatch(id, name, budget, True)
+        m = h.host.live()
         with s._tx() as c:
             t = h.tasks.get(pid('t', id, 'task'), c)
             if t.state != 'ready' or t.owner: raise Clash(f"t{t.id} is {t.state}{' and reserved' if t.owner else ''}", 'only free ready tasks dispatch')
             c.execute('UPDATE tasks SET run=1 WHERE id=?', (t.id,))
-            h.log.add(c, a.id, 'task.handed', f't{t.id} handed to the runner: {line(t.title, 80)}', f'task:t{t.id}', wf=t.wf)
+            h.log.add(c, a.id, 'task.handed', f"t{t.id} handed to the {'host' if m else 'runner'}: {line(t.title, 80)}", f'task:t{t.id}', wf=t.wf)
+            if m: h.mail.put(c, a, [m['agent']], f"{a.name} handed t{t.id} '{line(t.title, 80)}' to you: call host() to start an agent for it as your "
+                                                 'subagent.', 'steer', 'host', log=False)
+        if m: return {'task': f't{t.id}', 'launch': 'host', 'hint': f"{h.agents.get(m['agent']).name} hosts this hive and starts an agent for it as "
+                                                                     'its subagent; watch it with tasks or gather'}
         st = h.autorun()
         why = 'you run as a subagent, and subagents cannot start subagents of their own, so ' if launch != 'runner' else ''
         return {'task': f't{t.id}', 'launch': 'runner', 'runner': st,
@@ -323,8 +329,8 @@ class Sess:
             want, mine = h.roles.get(role).caps, h.roles.caps(a)
             kid = h.join(n, role, h.agents.wfNames().get(t.wf), a.name, f'dispatched for t{t.id}')
             h.tasks.reserve(c, a, t.id, kid.id)
-            c.execute('UPDATE agents SET budget=?,goal=?,deleg=?,grants=? WHERE id=?',
-                      (budget, t.about or t.title, t.id, None if want <= mine else dumps(sorted(want & mine)), kid.id))
+            c.execute('UPDATE agents SET budget=?,goal=?,deleg=?,grants=?,handed=? WHERE id=?',
+                      (budget, t.about or t.title, t.id, None if want <= mine else dumps(sorted(want & mine)), now(), kid.id))
         return {'agent': n, 'role': role, 'token': kid.token, 'task': f't{t.id}', 'prompt': s.promptFor(kid, t.id, sub),
                 'hint': f'start an agent with this prompt now; it acts in the hive as {n}, and Hive flags agents that have not started after 10 minutes'}
 
@@ -355,6 +361,8 @@ class Sess:
               grants: list[str] | None = None, deliver: str = '', paths: list[str] | None = None, verify: bool | str = False, harness: str | None = None):
         if harness: profile(harness, s.hive.cfg, True)
         return s.hive.tree.spawn(s._me(), goal, role, name, budget, launch, grants, deliver, paths, verify, harness)
+
+    def host(s, cap: int | None = None, stop: bool = False, tasks: bool = True): return s.hive.host.call(s._me(), cap, stop, tasks)
 
     def gather(s, of: list[str] | str | None = None, secs: float = 60, any: bool = False, budget: int = 2000):
         return s.hive.tree.gather(s._me(), of, secs, any, budget)

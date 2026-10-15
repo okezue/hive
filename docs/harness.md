@@ -25,7 +25,7 @@ Hive needs to know which agent is calling, and finds out in this order:
 2. The harness process. `hive start` and `hive run` record every harness process they launch in `~/.hive/hives.db`, and a session that calls `join` records the harness it runs under. The MCP server and the hooks look up their own process ancestry there, so they know their agent even when the harness hands them no environment (Gemini removes variables that look like secrets, and Codex passes MCP servers only a short list).
 3. A `join` call. Several agents sharing one connection, as subagents of one host do, each pass their token as `agent` on every call; the token is in the brief Hive returns.
 
-Hooks skip events that come from subagents, whose identity the hook cannot tell apart. Installed hooks run a small gate script (`~/.hive/hive-hook`) that starts Hive only when the session belongs to a hive: its environment carries a Hive identity, or Hive has marked the harness process that runs the hook. Every other session pays for one shell and nothing more, and hooks never print anything when Hive has nothing to say.
+Hooks tell subagents apart by the identifiers harnesses put on their events (Grok's subagent session id, Claude Code's `agent_id`) and act for a subagent only once Hive has tied it to a hosted hive agent (see Hosting a hive below); events from other subagents are skipped. Installed hooks run a small gate script (`~/.hive/hive-hook`) that starts Hive only when the session belongs to a hive: its environment carries a Hive identity, or Hive has marked the harness process that runs the hook. Every other session pays for one shell and nothing more, and hooks never print anything when Hive has nothing to say.
 
 ## hive start
 
@@ -96,3 +96,23 @@ hive plan plan.json && hive run
 ```
 
 With a default command or harness (or ones for `composer` and `distiller`), the compose and distill tasks Hive files as work finishes are picked up automatically. The runner starts agents as their tasks become ready, up to `max` at a time, records each process in the registry, passes it `HIVE_AGENT_TOKEN`, `HIVE_TASK`, `HIVE_DB`, and `HIVE_ROOT`, writes an MCP config for it to `{mcp}`, and logs its output under `.hive/run/`. When an agent stops without finishing, the runner reads the reason from its exit code and last lines of output (Claude Code's `API Error: 429` or `usage limit reached|<reset time>`, Codex's `exceeded retry limit` or `ran out of room in the model's context window`, Grok's `max turns reached`, Gemini's quota and `max session turns` messages, plus timeouts, hangs, and crashes) and acts on it as described in the README under Failures and recovery: it cools a rate-limited command for as long as the provider asks, switches to a `fallback`, restarts the same agent with a brief of its progress, or, when nothing is left to try, fails the task with a diagnosis you can act on and `hive retry`.
+
+## Hosting a hive inside a harness
+
+`host` turns a top-level harness session into the launcher for its hive. Each call registers the session as host (one per hive; it stays host while its harness process lives), hands back up to `cap` agents to start (`start`: name, role, description `hive <name>`, and prompt), and lists the ones running. The session starts each with its own subagent tool in the background (Grok's `spawn_subagent`, Claude Code's Agent tool), using the description and prompt as given, then calls `host` again as subagents finish; Hive's notices, and the `Stop` hook while room is free, tell it when agents are waiting.
+
+What `host` hands out, in order: helpers that hosted subagents spawned (deepest first, since their parents wait on them), tasks handed over with `dispatch`, and ready planned tasks nobody has taken (`tasks=false` skips these). An agent handed out but not started within ten minutes goes back in the queue. Hosted agents started for planned tasks get `[runner] budget` to spawn helpers of their own. While a host is live, `hive run` and automatic runners stand back, and `spawn` and `dispatch` never start a separate process (except a `spawn` that names another harness).
+
+Hooks bind each subagent to its hive agent from three sources: the `SubagentStart` event's description (Grok), the hive token in the subagent's first prompt (Grok), or the token on its first Hive call (Claude Code). From then on:
+
+- `PreToolUse` on a Hive tool rewrites the call's `agent` argument to the subagent's own token. Grok wraps MCP calls as `{"tool_name": ..., "tool_input": {...}}` and Claude Code passes the arguments directly; both are handled. The hook gate lets a Hive call through to Python only when it comes from a subagent of a session that hosts its hive (the host leaves a marker for its harness process in `~/.hive/hosting`), so other sessions pay nothing for this.
+- `PostToolUse` records the subagent's activity under its own name and returns its interrupts, messages, and updates.
+- `SubagentStop` blocks once per turn while the agent's task is unfinished. When the subagent stops anyway (or its session ends), Hive records why, returns the agent to the queue with a brief of earlier attempts, and tells the host; after `[host] restarts` restarts the task fails. When the task is done, the agent leaves.
+
+```toml
+# .hive/config.toml
+[host]
+max = 4          # hive agents running as the host's subagents at once
+free = 20        # free memory (%) needed to hand out another
+restarts = 3     # restarts after a subagent stops before finishing
+```

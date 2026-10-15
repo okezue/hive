@@ -8,9 +8,13 @@ HIVE = str(Path(sys.executable).parent/'hive')
 BASE = Path('/tmp/hive-live')
 MODEL = 'grok-4.7-build-fast'
 HOOKS = {'hooks': {'SessionStart': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook start'}]}],
-                   'PreToolUse': [{'matcher': 'Edit|Write', 'hooks': [{'type': 'command', 'command': f'{HIVE} hook pre'}]}],
+                   'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook prompt'}]}],
+                   'PreToolUse': [{'matcher': 'Edit|Write|search_replace|write|hive__.*', 'hooks': [{'type': 'command', 'command': f'{HIVE} hook pre'}]}],
                    'PostToolUse': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook post'}]}],
-                   'Stop': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook stop'}]}]}}
+                   'Stop': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook stop'}]}],
+                   'SubagentStart': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook substart'}]}],
+                   'SubagentStop': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook substop', 'timeout': 60}]}],
+                   'SessionEnd': [{'hooks': [{'type': 'command', 'command': f'{HIVE} hook end'}]}]}}
 RULES = ('The MCP server named "hive" connects you with the other agents working in this folder. Read every Hive notice that comes back with '
          'tool results or hook feedback, and act on interrupts before anything else.')
 
@@ -352,7 +356,38 @@ def egregore(c):
     h.close()
 
 
-SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover, 'plug': plug, 'depth': depth, 'egregore': egregore}
+def hosted(c):
+    d = workspace('hosted', {'README.md': '# names\n\nSmall helpers that greet people.\n'}, hooks=True)
+    plan = [{'key': 'greet', 'title': 'Write greet.py', 'about': 'Create greet.py with greet(name) returning f"Hello, {name}!". Then spawn exactly one '
+             'helper with hive spawn (goal: add a one-line module docstring to greet.py; deliver: the docstring in place) and gather its result '
+             'before you finish.'},
+            {'key': 'bye', 'title': 'Write farewell.py', 'about': 'Create farewell.py with farewell(name) returning f"Goodbye, {name}!".'},
+            {'title': 'Write test_names.py', 'about': 'Create test_names.py with one pytest test each for greet and farewell.', 'after': ['greet', 'bye']}]
+    (d/'plan.json').write_text(json.dumps(plan))
+    agent(d, 'lead', 'coordinator', 'You are lead, the coordinator of this hive. Create the tasks in plan.json with one hive plan call (pass its list '
+          'as tasks). Then run the hive inside this session: call hive host, start every agent it returns as your own subagent with spawn_subagent '
+          '(run_in_background true, with the description and prompt exactly as given), and keep going in rounds: call hive wait(secs=120) to sleep '
+          'until something changes, then hive host again and start whatever it returns. Never write the files yourself, and never end your turn '
+          'while hive tasks shows an unfinished task. When every task is done, reply with the task states.', 90, 2400)
+    h = Hive.open(d/'.hive'/'hive.db', d)
+    ts = {t.title: t for t in h.db.q('SELECT * FROM tasks WHERE kind!=?', ('verify',))}
+    c(len(ts) >= 4 and all(t.state == 'done' for t in ts.values()), f"every task is done: {[(k, t.state) for k, t in ts.items()]}")
+    g, b, tn = (d/x for x in ('greet.py', 'farewell.py', 'test_names.py'))
+    c(g.exists() and 'Hello, ' in g.read_text() and b.exists() and tn.exists(), 'the three files were written')
+    c(g.exists() and g.read_text().lstrip().startswith(('"""', "'''", '#')), 'the nested helper added the docstring')
+    runs = h.db.q('SELECT r.*,a.name,a.depth FROM runs r JOIN agents a ON a.id=r.agent')
+    names = {r.name for r in runs}
+    c(len(names) >= 4, f'every hive agent ran as a subagent of the host: {sorted(names)}')
+    helper = h.db.one("SELECT * FROM agents WHERE depth=2 AND launch='host'")
+    c(helper and helper.name in names, f"the helper a subagent spawned ran as the host's subagent too: {helper and helper.name}")
+    c(not h.db.one("SELECT 1 FROM meta WHERE key='runner'") and not (d/'.hive'/'run'/'runner.log').exists(), 'no runner process was started')
+    c(all(h.agents.named(n).state == 'left' for n in names), 'every hosted agent left once its work was done')
+    toks = h.db.one("SELECT COUNT(*) n FROM events e JOIN agents a ON a.id=e.agent WHERE a.name!='lead' AND e.kind IN ('progress','task.completed')").n
+    c(toks > 0, 'the subagents acted under their own hive identities')
+    h.close()
+
+
+SCENARIOS = {'coedit': coedit, 'hooks': hooks, 'runner': runner, 'tree': tree, 'recover': recover, 'plug': plug, 'depth': depth, 'egregore': egregore, 'hosted': hosted}
 
 
 def main():

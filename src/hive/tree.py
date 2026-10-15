@@ -43,7 +43,10 @@ class Tree:
         if not (goal or '').strip(): raise Bad('a child needs a goal: what it should achieve')
         if launch not in LAUNCH: raise Bad(f'launch is one of {", ".join(LAUNCH)}')
         sub, asked = s.agents.hosted(a), launch
-        launch = 'runner' if harness and launch in ('auto', 'host') or sub and launch in ('auto', 'host') else 'host' if launch == 'auto' else launch
+        m = s.host.live() if getattr(s, 'host', None) and not harness and launch != 'none' else None
+        q = bool(m) and sub
+        if m: launch = 'host'
+        else: launch = 'runner' if harness and launch in ('auto', 'host') or sub and launch in ('auto', 'host') else 'host' if launch == 'auto' else launch
         inh = not harness and launch == 'runner' and s.agents.home(a)
         if a.depth+1 > cfg.depth: raise Clash(f'{a.name} is at depth {a.depth}; the tree allows {cfg.depth} levels', 'do this yourself or escalate')
         mine, want = s.roles.caps(a), s.roles.get(role).caps
@@ -66,15 +69,17 @@ class Tree:
             kid = s.agents.join(n, role, s.agents.wfNames().get(a.wf), a.id, goal[:200])
             t = s.tasks.delegate(c, a, kid, goal, deliver, role, paths, verify, harness or (inh and '~'+inh))
             c.execute("UPDATE agents SET budget=budget-? WHERE id=?", (b+1, a.id))
-            c.execute("UPDATE agents SET budget=?,goal=?,deleg=?,launch=?,grants=?,state=?,task=NULL WHERE id=?",
-                      (b, goal, t, launch, None if caps == want else dumps(sorted(caps)), 'pending', kid.id))
+            c.execute("UPDATE agents SET budget=?,goal=?,deleg=?,launch=?,grants=?,state=?,task=NULL,handed=? WHERE id=?",
+                      (b, goal, t, launch, None if caps == want else dumps(sorted(caps)), 'pending', None if q or launch != 'host' else now(), kid.id))
+            if q: s.mail.put(c, a, [m['agent']], f'{a.name} spawned {n}: call host() to start it as your subagent.', 'steer', 'host', log=False)
             s.log.add(c, a.id, 'agent.spawned', f'spawned {n} ({role}, budget {b}, {launch}) for t{t}: {line(goal, 100)}', f'agent:{a.name}',
                       {'child': n, 'task': f't{t}'}, a.wf)
             kid = c.execute('SELECT * FROM agents WHERE id=?', (kid.id,)).fetchone()
         out = {'agent': n, 'role': role, 'task': f't{t}', 'depth': kid.depth, 'budget': b, 'launch': launch, 'token': kid.token,
                'path': s.path(kid.id)} | ({'harness': harness or inh} if harness or inh else {})
         if caps != want: out['narrowed'] = sorted(want - caps)
-        if launch == 'host':
+        if q: out['hint'] = f"{s.agents.get(m['agent']).name} hosts this hive and starts {n} as its subagent; gather collects its result"
+        elif launch == 'host':
             out |= {'prompt': s.prompt(kid), 'hint': 'start a subagent with this prompt now (Hive flags helpers that have not started after 10 '
                                                      'minutes); gather collects its result'}
         elif launch == 'runner':

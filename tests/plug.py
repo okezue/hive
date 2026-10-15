@@ -106,7 +106,8 @@ def testInstallWritesEveryHarnessAndKeepsTheRest(home, root):
     assert g['mcp_servers']['hive']['args'][-1] == 'mcp' and g['mcp_servers']['hive']['env'] == {'HIVE_HOME': os.environ['HIVE_HOME']}
     assert (home/'.grok'/'config.toml').read_text().startswith('# mine') and list((home/'.grok').glob('config.toml.bak-*'))
     hooks = json.loads((home/'.grok'/'hooks'/'hive.json').read_text())['hooks']
-    assert set(hooks) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd'} and 'matcher' not in hooks['Stop'][0]
+    assert set(hooks) == {'SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd', 'SubagentStart', 'SubagentStop'} and \
+        'matcher' not in hooks['Stop'][0]
     c = json.loads((root/'.claude'/'settings.json').read_text())['hooks']['PostToolUse']
     assert [h['command'] for g2 in c for h in g2['hooks']] == ['lint', c[1]['hooks'][0]['command']] and c[1]['hooks'][0]['command'].endswith('hook post')
     assert json.loads((root/'.mcp.json').read_text())['mcpServers']['db'] == {'command': 'dbmcp'}

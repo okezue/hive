@@ -49,6 +49,11 @@ auto = false         # true enrolls every agent in the egregore (circles, board,
 # cap = 7            # seats per circle; full circles split in two
 # term = 14400       # seconds an elected office lasts
 
+[host]
+max = 4              # hive agents a hosting harness session runs at once as its own subagents (see the host tool)
+free = 20            # free memory (%) needed to hand out another one
+restarts = 3         # times a hosted agent is restarted after its subagent stops before finishing
+
 # Your own harness, usable wherever a harness name goes: run is the headless command, chat the interactive one
 # [harness.mine]
 # run = ["mine", "-p", "{prompt}"]
@@ -71,6 +76,7 @@ class Cfg:
     insights: dict = field(default_factory=dict)
     harness: dict = field(default_factory=dict)
     egregore: dict = field(default_factory=dict)
+    host: dict = field(default_factory=dict)
 
     @property
     def dir(s): return s.db.parent.parent if s.db.parent.name == 'sessions' else s.db.parent
@@ -111,7 +117,7 @@ def load(db=None, root=None, session=None, cwd=None):
     h, t = st.get('hive', {}), st.get('tree', {})
     return Cfg(db, root, int(h.get('reminder', 20)), int(h.get('tries', 2)), float(h.get('stale', 900)),
                dict(st.get('summarizer', {})), dict(st.get('runner', {})), int(t.get('depth', 4)), int(t.get('fanout', 8)), int(t.get('budget', 32)),
-               dict(st.get('insights', {})), dict(st.get('harness', {})), dict(st.get('egregore', {})))
+               dict(st.get('insights', {})), dict(st.get('harness', {})), dict(st.get('egregore', {})), dict(st.get('host', {})))
 
 
 def init(root):

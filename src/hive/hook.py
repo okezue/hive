@@ -10,7 +10,8 @@ EDITS = {'edit', 'write', 'multiedit', 'notebookedit', 'search_replace', 'edit_f
          'str_replace_based_edit_tool', 'apply_patch', 'write_file', 'replace'}
 KEYS = ('file_path', 'path', 'target_file', 'notebook_path', 'filePath', 'filename')
 PATCH = re.compile(r'^(?:\*\*\* (?:Update|Add) File: (.+)|\+\+\+ b/(.+))$', re.M)
-NAMES = {'pre': 'PreToolUse', 'post': 'PostToolUse', 'prompt': 'UserPromptSubmit', 'stop': 'Stop', 'start': 'SessionStart', 'end': 'SessionEnd'}
+NAMES = {'pre': 'PreToolUse', 'post': 'PostToolUse', 'prompt': 'UserPromptSubmit', 'stop': 'Stop', 'start': 'SessionStart', 'end': 'SessionEnd',
+         'substart': 'SubagentStart', 'substop': 'SubagentStop'}
 GEM = {'pre': 'BeforeTool', 'post': 'AfterTool', 'prompt': 'BeforeAgent', 'stop': 'AfterAgent', 'start': 'SessionStart', 'end': 'SessionEnd'}
 
 
@@ -22,7 +23,7 @@ class Ev:
         e.inp = inp if isinstance(inp, dict) else {'input': inp}
 
     @property
-    def sub(e): return bool(e.raw.get('subagentType') or e.raw.get('subagent_type'))
+    def sub(e): return bool(e.raw.get('subagentType') or e.raw.get('subagent_type') or e.raw.get('agent_id'))
 
     @property
     def hive(e):
@@ -67,6 +68,7 @@ def text(n):
     out += [n['queued']] if n.get('queued') else []
     out += [f'Update: {u}' for u in n.get('updates', [])]
     out += ['Merge requests waiting on you: ' + ', '.join(n['mergesWaitingOnYou'])] if n.get('mergesWaitingOnYou') else []
+    out += [f"Hive: {n['host']}"] if n.get('host') else []
     return '\n'.join(out + ([n['roleReminder']] if n.get('roleReminder') else []))
 
 
@@ -86,7 +88,7 @@ def synced(p, r):
     return '\n'.join(out), st == 'conflict'
 
 
-def emit(fmt, kind, ctx=None, deny=None, block=None):
+def emit(fmt, kind, ctx=None, deny=None, block=None, upd=None):
     if fmt == 'text': return deny or block or ctx or ''
     if fmt == 'gemini':
         if deny: return json.dumps({'decision': 'deny', 'reason': deny}, ensure_ascii=False)
@@ -95,6 +97,7 @@ def emit(fmt, kind, ctx=None, deny=None, block=None):
     spec, out = {'hookEventName': NAMES[kind]}, {}
     if deny: spec |= {'permissionDecision': 'deny', 'permissionDecisionReason': deny}
     elif ctx and not block: spec['additionalContext'] = clip(ctx, 9500)
+    if upd is not None and not deny: spec['updatedInput'] = upd
     if block: out |= {'decision': 'block', 'reason': clip(block, 9500)}
     return json.dumps(out | ({'hookSpecificOutput': spec} if len(spec) > 1 else {}), ensure_ascii=False)
 
@@ -102,7 +105,14 @@ def emit(fmt, kind, ctx=None, deny=None, block=None):
 def handle(kind, raw, hive, x, fmt='claude'):
     if kind not in EVENTS: raise ValueError(f'unknown hook event {kind!r}')
     e = Ev(kind, raw)
-    if x is None or e.sub: return None
+    if x is None: return None
+    if e.sub or kind in ('substart', 'substop'):
+        if (a := hive.host.bind(raw, kind, e.hive)) is None or kind == 'substart': return None
+        if kind in ('substop', 'end'): return emit(fmt, 'substop', block=r) if (r := hive.host.stopping(raw, a, kind == 'end')) else None
+        if kind == 'stop': return None
+        from .sess import Sess
+        x = Sess(hive, a.id)
+        if kind == 'pre' and e.hive: return emit(fmt, kind, upd=u) if (u := hive.host.token(raw, a)) is not None else None
     cwd = raw.get('cwd') or str(hive.root)
 
     def mine():

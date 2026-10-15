@@ -47,6 +47,14 @@ Work can be placed in a particular harness: a plan task or a `spawn` takes `harn
 
 **Sharing MCP servers.** `hive mount <name> -- <command> [args]` (or `--url` for HTTP servers) makes an MCP server's tools available to every agent in the hive as `<name>.<tool>`, called through Hive's `call`, so a Codex agent can use a server that only your Grok config has. `hive mount --from grok` imports the servers from a harness's config, and agents with the `exec` capability can `mount` servers themselves. Each agent's Hive server keeps its own live connection to a mounted server and reconnects if it dies; mount an HTTP server when every agent should share one instance. Environment values written as `${VAR}` are read from each caller when it connects, so secrets stay out of the hive.
 
+## A hive inside your harness
+
+A top-level Grok or Claude Code session can run a whole hive itself, with every hive agent appearing as one of its ordinary subagents (in Grok's tasks pane and dock, in Claude Code's `/tasks`) and running on that session's model, account, permissions, and sandbox. Ask the session to plan the work and host it. It calls `host`, and Hive hands it agents to start with its own subagent tool, at most `[host] max` (4) at a time and only while free memory stays above `[host] free` (20%). Hive keeps handing out more as work appears: planned tasks that become ready, tasks a subagent hands over with `dispatch`, and helpers that subagents `spawn`. Harness subagents cannot start subagents of their own, so a subagent's helper waits for the host, which starts it as a sibling subagent; the hive keeps the real lineage, so `tree`, `gather`, budgets, and custody work as they do anywhere else. While a session hosts, Hive starts no runner processes, so the whole hive lives inside the harness and ends with it.
+
+The hooks make each subagent a full hive agent. Hive ties every subagent to its hive identity (from the description `host` gave it, the token in its prompt, or its first Hive call) and puts that agent's token on every Hive call the subagent makes, so a subagent that forgets its token, or passes someone else's, still acts as itself. Interrupts and messages reach it on its next tool call, and it cannot stop while its task is unfinished: the `SubagentStop` gate asks it once per turn to finish with `done` or `fail`. A subagent that stops anyway is handed out again with a brief of what it already did, up to `[host] restarts` (3) times, after which the task fails and the host is told. A hosted agent leaves the hive when its subagent finishes.
+
+`hive host` shows who hosts, what runs, and what waits, and `hive host --release` ends hosting. Hosting relies on the `SubagentStart` and `SubagentStop` hooks, so run `hive install grok` (or `claude`) again after upgrading Hive; `hive doctor` names missing hook events.
+
 ## Builds at scale
 
 When many agents work on one app, builds become the bottleneck: each checkout keeps its own cold build cache, every build recompiles from scratch somewhere, and parallel builds of a large project exhaust memory, so they end up queued for a long time. `build` (an MCP tool, and `hive build [kind]` on the command line) replaces running build commands directly:
@@ -154,7 +162,7 @@ Every restart keeps the same agent identity, with its claims, file views, and un
 | ctx | `put` `get` `keys` `drop` |
 | files | `read` `edit` `write` `sync` `diff` `release` `claim` `files` `merges` `propose` `respond` `abandon` |
 | tasks | `plan` `tasks` `task` `take` `done` `fail` `verify` `cancel` `dispatch` `define` `assign` `retry` `faults` |
-| tree | `spawn` `gather` `tree` `node` `walk` `path` `find` `brief` `fund` `adopt` `escalate` `decide` `issues` |
+| tree | `spawn` `gather` `tree` `node` `walk` `path` `find` `brief` `fund` `adopt` `escalate` `decide` `issues` `host` |
 | build | `build` `builds` |
 | know | `note` `findings` `material` `compose` `gist` `stale` `harvest` `distill` `recall` `weigh` `retire` |
 | tools | `offer` `tools` `call` `answer` `result` `withdraw` `mount` `unmount` |
@@ -179,7 +187,7 @@ dev.done(t, 'added /health; tests pass')
 
 ## CLI
 
-`hive install|uninstall|doctor [harness]`, `hive start <harness> [prompt]`, `hive build [kind] [--list|--kinds]`, `hive ls`, `hive mount [name] [-- command]`, `hive unmount <name>`, `hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run [--harness h]`, `hive faults`, `hive retry [task]`, `hive egregore [circles|circle|board|motions|charter|elders|calm|on|off]`, and `hive hook <event>` for harnesses. Commands act on the hive of the current project, or the one `-H <name|number|path>` picks from `hive ls`. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
+`hive install|uninstall|doctor [harness]`, `hive start <harness> [prompt]`, `hive build [kind] [--list|--kinds]`, `hive ls`, `hive mount [name] [-- command]`, `hive unmount <name>`, `hive status`, `hive tree [agent] --depth 3`, `hive insights [query]`, `hive tail -f`, `hive history <agent>`, `hive summary [--agent a]`, `hive send <to> <body> --mode interrupt`, `hive tasks`, `hive plan plan.json`, `hive files`, `hive merges`, `hive run [--harness h]`, `hive faults`, `hive retry [task]`, `hive egregore [circles|circle|board|motions|charter|elders|calm|on|off]`, `hive host [--release]`, and `hive hook <event>` for harnesses. Commands act on the hive of the current project, or the one `-H <name|number|path>` picks from `hive ls`. The CLI acts as an `operator` coordinator unless given `--as <agent>`.
 
 ## Configuration
 

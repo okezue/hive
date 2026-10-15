@@ -9,6 +9,7 @@ from .cfg import IGNORE, load, locate
 from .db import Db
 from .disk import Disk
 from .egregore import Egregore
+from .host import Host
 from .err import Missing
 from .fault import Faults
 from .files import Files
@@ -42,6 +43,7 @@ class Hive:
         s.know = Know(s)
         s.faults = Faults(s)
         s.egregore = Egregore(s)
+        s.tree.host = s.host = Host(s)
         s.tree.tips, s.tree.run = s.know.tips, s.autorun
         if (d := cfg.dir).name == '.hive' and not (d/'.gitignore').exists():
             with suppress(OSError): (d/'.gitignore').write_text(IGNORE)
@@ -69,6 +71,7 @@ class Hive:
         from .harness import found
         from .reg import alive
         from .util import J, dumps, now
+        if s.host.live(): return 'host'
         if os.environ.get('HIVE_AUTORUN', '1') == '0' or s.cfg.runner.get('auto', True) is False: return 'off'
         if not (s.cfg.runner.get('roles') or found(s.cfg)): return 'none'
         (d := s.cfg.dir/'run').mkdir(parents=True, exist_ok=True)

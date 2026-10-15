@@ -83,6 +83,15 @@ def mark(pid, on=True):
     with suppress(OSError): (marks()/str(pid)).touch() if on else (marks()/str(pid)).unlink(missing_ok=True)
 
 
+def hosting(pid=None, on=True):
+    d = home()/'hosting'
+    with suppress(OSError):
+        d.mkdir(parents=True, exist_ok=True)
+        for f in d.iterdir():
+            if not f.name.isdigit() or not alive(int(f.name)): f.unlink(missing_ok=True)
+        if pid: (d/str(pid)).touch() if on else (d/str(pid)).unlink(missing_ok=True)
+
+
 def unmark(c):
     live = {r.pid for r in c.execute('SELECT pid,db FROM binds').fetchall() if alive(r.pid) and os.path.exists(r.db)}
     with suppress(OSError):

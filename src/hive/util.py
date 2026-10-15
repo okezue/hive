@@ -3,14 +3,14 @@ import hashlib, json, re, secrets, time
 from .err import Bad
 
 now = time.time
-EVENTS = ('pre', 'post', 'prompt', 'stop', 'start', 'end')
+EVENTS = ('pre', 'post', 'prompt', 'stop', 'start', 'end', 'substart', 'substop')
 GROUPS = {
     'core': 'me progress leave overview digest watch roles',
     'msgs': 'send inbox ack ask wait share handoff follow',
     'ctx': 'put get keys drop',
     'files': 'read edit write sync diff release claim files merges propose respond abandon',
     'tasks': 'plan tasks task take done fail verify cancel dispatch define assign retry faults',
-    'tree': 'spawn gather tree node walk path find brief fund adopt escalate decide issues',
+    'tree': 'spawn gather tree node walk path find brief fund adopt escalate decide issues host',
     'know': 'note findings material compose gist stale harvest distill recall weigh retire',
     'tools': 'offer tools call answer result withdraw mount unmount',
     'build': 'build builds',

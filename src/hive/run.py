@@ -193,6 +193,7 @@ class Runner:
         s.reap()
         s.sweep()
         s.idle = {r.id for r in s.hive.db.q("SELECT id FROM agents WHERE state='idle'")}
+        if s.hive.host.live(): return
         for a in s.pend():
             if s.full(): return
             t = s.hive.tasks.get(a.deleg)

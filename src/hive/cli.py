@@ -286,6 +286,20 @@ def build(a):
     return 3 if r['state'] in ('queued', 'running') else 0 if r.get('ok') else 1
 
 
+def host(a):
+    h = opened(a)
+    if a.release:
+        m = h.host.get()
+        return dump(h.host.release(h.agents.get(m['agent'])) if m else {'hosting': False})
+    r = h.host.show()
+    if a.json: return dump(r)
+    m = r['host']
+    print(f"hosted by {m['agent']} in {m['harness'] or 'its harness'} since {m['since']}, up to {m['max']} at once" if m else
+          'no session hosts this hive (a top-level harness session starts hosting with the host tool)')
+    print(f"running: {', '.join(r['running']) or '-'}\nqueued:  {', '.join(r['queued']) or '-'}")
+    for x in r['subagents']: print(f"  {x['agent']:<20}{x['state']:<9}{x['since']:<10}{x['subagent']}" + (f"  ({x['why']})" if x.get('why') else ''))
+
+
 def switch(h, on):
     p, v = h.cfg.dir/'config.toml', f"auto = {'true' if on else 'false'}"
     t = p.read_text() if p.exists() else ''
@@ -383,6 +397,7 @@ def parser():
     cmd(build, opt('kind', nargs='?'), opt('--wait', type=float, default=3600), opt('--id'), opt('--list', action='store_true'),
         opt('--limit', type=int, default=10), opt('--kinds', action='store_true'), opt('--json', action='store_true'), opt('--force', action='store_true'),
         opt('--work', help=argparse.SUPPRESS))
+    cmd(host, opt('--release', action='store_true', help='stop the current session from hosting'), opt('--json', action='store_true'))
     cmd(egregore, opt('view', nargs='?', default='pulse', choices=['pulse', 'circles', 'circle', 'board', 'motions', 'charter', 'elders', 'calm', 'on', 'off']),
         opt('args', nargs='*'), opt('--depth', type=int, default=2), opt('--limit', type=int, default=20), opt('--json', action='store_true'), who=True)
     return p

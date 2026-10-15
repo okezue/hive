@@ -5,9 +5,9 @@ from pathlib import Path
 from .err import Bad, Err, Missing
 from .prompt import brief
 
-PRE = 'Edit|Write|MultiEdit|NotebookEdit|apply_patch|search_replace|edit_file|write_file|replace'
+PRE = 'Edit|Write|MultiEdit|NotebookEdit|apply_patch|search_replace|edit_file|write_file|replace|hive__.*|mcp__hive__.*'
 CL = (('SessionStart', '', 'start'), ('UserPromptSubmit', '', 'prompt'), ('PreToolUse', PRE, 'pre'), ('PostToolUse', '', 'post'),
-      ('Stop', '', 'stop'), ('SessionEnd', '', 'end'))
+      ('Stop', '', 'stop'), ('SessionEnd', '', 'end'), ('SubagentStart', '', 'substart'), ('SubagentStop', '', 'substop'))
 GE = (('SessionStart', '', 'start'), ('BeforeAgent', '', 'prompt'), ('BeforeTool', 'write_file|replace', 'pre'), ('AfterTool', '', 'post'),
       ('AfterAgent', '', 'stop'), ('SessionEnd', '', 'end'))
 H = {
@@ -28,8 +28,8 @@ H = {
 }
 ORDER = tuple(H)
 LIST = {'cursor': ['cursor-agent', 'mcp', 'list']}
-OURS = re.compile(r'''(?:^|[\s/'"])hive['"]?\s+hook\s+(?:pre|post|prompt|stop|start|end)\b|\s-m\s+hive\s+hook\s+(?:pre|post|prompt|stop|start|end)\b|'''
-                  r'''(?:^|[\s/'"])hive-hook['"]?\s+(?:pre|post|prompt|stop|start|end)\b''')
+OURS = re.compile(r'''(?:^|[\s/'"])hive['"]?\s+hook\s+(?:pre|post|prompt|stop|start|end|substart|substop)\b|\s-m\s+hive\s+hook\s+(?:pre|post|prompt|stop|start|end|substart|substop)\b|'''
+                  r'''(?:^|[\s/'"])hive-hook['"]?\s+(?:pre|post|prompt|stop|start|end|substart|substop)\b''')
 TBL = re.compile(r'^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$')
 ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
 
@@ -63,6 +63,13 @@ GATE = '''#!/bin/sh
 # Hive hook gate: start Hive only in sessions that belong to a hive, without starting any other process to find out.
 [ -n "${HIVE_AGENT:-}${HIVE_AGENT_TOKEN:-}" ] || [ -e %(marks)s/$PPID ] ||
   { [ -r /proc/$PPID/stat ] && read -r _ _ _ p _ < /proc/$PPID/stat && [ -e %(marks)s/$p ]; } || exit 0
+# a Hive tool call needs the hook only inside a subagent of a session that hosts its hive, where Hive passes the subagent's own token
+if [ "$1" = pre ]; then
+  in=$(cat)
+  case "$in" in *'"toolName":"hive__'*|*'"toolName": "hive__'*|*'"tool_name":"mcp__hive__'*|*'"tool_name": "mcp__hive__'*)
+    case "$in" in *'"subagentType"'*|*'"agent_id"'*) [ -e %(hosting)s/$PPID ] || exit 0;; *) exit 0;; esac;; esac
+  printf '%%s\n' "$in" | exec %(run)s hook "$@"
+fi
 exec %(run)s hook "$@"
 '''
 
@@ -70,7 +77,7 @@ exec %(run)s hook "$@"
 def gate(dry=False):
     e, hm = [f'{k}={v}' for k, v in extra().items()], Path(extra().get('HIVE_HOME') or '~/.hive').expanduser()
     p = hm/'hive-hook'
-    text = GATE % {'marks': shlex.quote(str(hm/'bound')), 'run': shlex.join((['env', *e] if e else []) + exe())}
+    text = GATE % {'marks': shlex.quote(str(hm/'bound')), 'hosting': shlex.quote(str(hm/'hosting')), 'run': shlex.join((['env', *e] if e else []) + exe())}
     if not dry and (not p.exists() or p.read_text() != text):
         from .reg import reg
         hm.mkdir(parents=True, exist_ok=True)
@@ -205,7 +212,7 @@ def putHooks(n, scope, root, on=True, dry=False):
         hs[ev] = [g for g in gs if g['hooks']]
         if not hs[ev]: del hs[ev]
     for ev, m, k in evs if on else ():
-        t = (60 if k == 'stop' else 30) * (1000 if fmt == 'gemini' else 1)
+        t = (60 if k in ('stop', 'substop') else 30) * (1000 if fmt == 'gemini' else 1)
         hs.setdefault(ev, []).append(({'matcher': m} if m else {}) | {'hooks': [{'type': 'command', 'command': hookCmd(k, fmt, dry), 'timeout': t}]})
     if hs: d['hooks'] = hs
     else: d.pop('hooks', None)
@@ -255,13 +262,16 @@ def installed(n, root):
     return ''
 
 
-def hooked(n, root):
+def hooked(n, root, gaps=False):
     if 'hooks' not in H[n]: return ''
     for sc in ('project', 'user'):
         if sc == 'project' and where(H[n]['hooks'][0], root).resolve() == where(H[n]['hooks'][1], root).resolve(): continue
         with suppress(Err, OSError):
-            if OURS.search(json.dumps(readJ(where(H[n]['hooks'][0 if sc == 'project' else 1], root)).get('hooks', {}))): return sc
-    return ''
+            hs = readJ(where(H[n]['hooks'][0 if sc == 'project' else 1], root)).get('hooks', {})
+            if OURS.search(json.dumps(hs)):
+                if not gaps: return sc
+                return sc, [ev for ev, _, _ in H[n]['hooks'][2] if not OURS.search(json.dumps(hs.get(ev, [])))]
+    return ('', []) if gaps else ''
 
 
 async def shake(sp, root):
@@ -307,7 +317,9 @@ def trusted(n, root, scope='project'):
 
 def doctor(n, root, native=True):
     out, sc = {'harness': n, 'bin': shutil.which(H[n]['bin']) or ''}, installed(n, root)
-    out |= {'installed': sc or 'no', 'hooks': hooked(n, root) or ('no' if 'hooks' in H[n] else 'not supported')}
+    hk, gap = hooked(n, root, True) if 'hooks' in H[n] else ('', [])
+    out |= {'installed': sc or 'no', 'hooks': (f"{hk} (missing {', '.join(gap)}: run hive install {n})" if gap else hk) if hk else
+            ('no' if 'hooks' in H[n] else 'not supported')}
     if not sc: return out | {'ok': False, 'fix': f'hive install {n}'}
     sp = servers(n, root, sc)['hive']
     out['config'] = str(mcpFile(n, sc, root))

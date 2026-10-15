@@ -140,6 +140,8 @@ Configuration lives in `[egregore]` in `.hive/config.toml`: `auto`, `cap` (7), `
 
 ## Sources
 
+The five full research reports, with every source they cite, are in [research/](research/README.md). The ones this design relies on most:
+
 Biology
 - Tero et al. 2010, Rules for biologically inspired adaptive network design (Physarum). https://www.science.org/doi/10.1126/science.1177894
 - Reid et al. 2012, Slime mold uses an externalized spatial memory. https://www.pnas.org/doi/10.1073/pnas.1215037109
